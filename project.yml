@@ -10,6 +10,9 @@ packages:
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
     from: "0.15.0"
+  WhisperKit:
+    url: https://github.com/argmaxinc/argmax-oss-swift
+    from: "1.0.0"
 targets:
   Voicely:
     type: application
@@ -21,6 +24,8 @@ targets:
         product: VoicelyCore
       - package: FluidAudio
         product: FluidAudio
+      - package: WhisperKit
+        product: WhisperKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.voicely.app

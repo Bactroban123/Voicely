@@ -46,10 +46,12 @@ final class RecordingController {
 
     private static func makeEngine(for modelID: String) -> TranscriptionEngine {
         switch modelID {
+        case "whisper-large-v3-turbo":
+            return WhisperKitEngine()        // multilingual incl. Hebrew
         case "parakeet-multi":
             return ParakeetEngine(version: .v3)
         default:
-            // parakeet-en is the default; Whisper / Apple Speech engines land next.
+            // parakeet-en is the default; Apple Speech engine lands next.
             return ParakeetEngine(version: .v2)
         }
     }
