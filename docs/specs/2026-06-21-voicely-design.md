@@ -49,7 +49,7 @@ Each component is a Swift type behind a protocol so it can be unit-tested in iso
 
 ### 2.1 Capture — `HotKeyMonitor` + `AudioRecorder`
 - **Hotkey:** a **CGEventTap** on `.keyDown`/`.keyUp`/`.flagsChanged` feeding a **pure tap/hold state machine** (lifted from Hex's `HotKeyProcessor`, MIT). Logic: start recording on key-down; on key-up, `dt < 250 ms` = **tap-to-toggle** (keep recording until next tap), `dt ≥ 250 ms` = **hold-to-talk** (stop on release). Ignore autorepeat; swallow printable hotkeys. `Esc` cancels.
-- **Default hotkey:** Right-`⌥` (rebindable). fn/Globe offered with a "collides with system Dictation" warning.
+- **Hotkey is user-configurable in-app** — a first-class recorder in Settings (`KeyboardShortcuts.Recorder` for capture UI; our CGEventTap drives the actual tap/hold logic). Ships with **Right-`⌥`** pre-filled as a sensible default, but the user sets whatever they want. fn/Globe is allowed with a "collides with system Dictation/emoji" warning.
 - **Secure Input:** when a password field disables the tap, show a "paused (secure field)" state — unavoidable by OS design.
 - **Audio:** `AVAudioEngine` mic tap (installed off-main) → `AVAudioConverter` → **16 kHz mono Float32**; FluidAudio's Silero VAD/EOU trims silence. RMS levels published to the HUD on the MainActor.
 
