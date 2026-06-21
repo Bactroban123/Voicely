@@ -6,7 +6,7 @@ import SwiftUI
 /// insertion lands correctly (research §4).
 final class HUDPanel: NSPanel {
     init() {
-        super.init(contentRect: NSRect(x: 0, y: 0, width: 240, height: 52),
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 380, height: 64),
                    styleMask: [.nonactivatingPanel, .borderless],
                    backing: .buffered,
                    defer: false)

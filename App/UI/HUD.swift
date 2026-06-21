@@ -8,31 +8,47 @@ final class HUDModel: ObservableObject {
     @Published var label: String = "Listening"
 }
 
-/// The capsule itself: a self-contained dark surface (legible over any app), with
-/// the amber state dot, live waveform, and label. See DESIGN.md.
+/// The Frostpane HUD: a single frosted-glass capsule (the only glass surface in
+/// the app), with the breathing live-cyan orb and waveform. Reads over any app,
+/// light or dark. See DESIGN.md.
 struct HUDView: View {
     @ObservedObject var model: HUDModel
-    private let amber = Color(red: 0.937, green: 0.624, blue: 0.153)
-    private let surface = Color(red: 0.172, green: 0.172, blue: 0.157)
+    @State private var breathe = false
+
+    private let live = Color(red: 0.133, green: 0.827, blue: 0.933)    // #22D3EE electric cyan
+    private let glacier = Color(red: 0.227, green: 0.659, blue: 0.788) // #3AA8C9
+
+    private var accent: Color { model.phase == .recording ? live : glacier }
 
     var body: some View {
+        capsule
+            .fixedSize()
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var capsule: some View {
         HStack(spacing: 12) {
             Circle()
-                .fill(amber)
-                .frame(width: 8, height: 8)
-                .opacity(model.phase == .recording ? 1 : 0.5)
-            WaveformView(level: model.level, color: amber)
+                .fill(accent)
+                .frame(width: 9, height: 9)
+                .shadow(color: live.opacity(model.phase == .recording ? 0.7 : 0), radius: 5)
+                .scaleEffect(model.phase == .recording && breathe ? 1.0 : 0.82)
+            WaveformView(level: model.level, color: accent)
                 .frame(width: 96, height: 22)
             Text(model.label)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Color(white: 0.95))
+                .foregroundStyle(.primary)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 11)
-        .background(surface)
-        .clipShape(Capsule())
-        .overlay(Capsule().strokeBorder(Color.white.opacity(0.16), lineWidth: 0.5))
-        .fixedSize()
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(.white.opacity(0.22), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.14), radius: 14, y: 4)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
+                breathe = true
+            }
+        }
     }
 }
 

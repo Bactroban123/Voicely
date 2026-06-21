@@ -104,6 +104,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Voicely")
         image?.isTemplate = !active
         statusItem?.button?.image = image
-        statusItem?.button?.contentTintColor = active ? NSColor.systemOrange : nil
+        // Frostpane: live-cyan while capturing/processing, monochrome template when idle.
+        let liveCyan = NSColor(srgbRed: 0.133, green: 0.827, blue: 0.933, alpha: 1)
+        statusItem?.button?.contentTintColor = active ? liveCyan : nil
     }
 }
