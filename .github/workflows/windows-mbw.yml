@@ -37,6 +37,10 @@ jobs:
           --name MyBeautifulWife
           --icon app/icon.ico
           --collect-all sounddevice
+          --collect-all pystray
+          --collect-all pyperclip
+          --hidden-import pystray._win32
+          --hidden-import PIL.ImageDraw
           app/main.py
 
       - name: Build installer (Inno Setup)
