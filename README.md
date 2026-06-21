@@ -1,37 +1,51 @@
 # Voicely
 
-A personal, native macOS menu-bar dictation app. Press a hotkey, speak, and
-on-device-transcribed + AI-cleaned text lands at your cursor in any app. Audio
-never leaves the Mac; only the cleaned-up text (optionally) touches the network.
+**Speak any language. Type it in another. Privately, on your device.**
 
-Not for sale. Built for one person, on an Apple M3 Pro.
+The private, bilingual dictation app for people who think in two languages. Hold a
+hotkey, speak English or Hebrew, and clean (or translated) text lands at your cursor
+in any app. Speech recognition runs **entirely on-device** — your audio never leaves
+the Mac. Native, not Electron.
 
-## How it works
+```
+hold hotkey → speak (EN / עברית) → on-device transcribe → AI clean / translate → insert at cursor
+```
 
-`hotkey → record → transcribe on-device (Parakeet) → clean up via OpenRouter → insert at cursor`
-
-- **Activation:** one key — quick tap toggles, hold is push-to-talk.
-- **Transcription:** on-device (FluidAudio/Parakeet default; Whisper / Apple Speech selectable).
-- **Cleanup:** OpenRouter (Gemini 2.5 Flash-Lite default), with custom-vocabulary correction; falls back to raw text if off or offline.
-- **Insertion:** clipboard paste with an Accessibility-first option and a copy-only safety net.
-
-## Repo
-
-| Path | What |
-|---|---|
-| `PRODUCT.md` · `DESIGN.md` | Product context + visual identity (warm amber) |
-| `docs/research/` | The 5-agent research sweep (engines, macOS APIs, OSS teardown, OpenRouter) |
-| `docs/specs/` | The design spec |
-| `docs/plans/` | The 6-phase execution plan |
-| `VoicelyCore/` | The pure, tested logic (Swift package) — `./VoicelyCore/scripts/verify.sh` |
-| `BUILD.md` | Build status + how to unblock the full app with Xcode |
+## What makes it different (vs Wispr Flow)
+1. **On-device + private** — no screenshots, no audio upload.
+2. **English ⇄ Hebrew translation** — no other system-wide dictation app does it.
+3. **Best-in-class Hebrew** (ivrit.ai, planned) · **native, not Electron** · **offline-reliable**.
 
 ## Status
+A working macOS app (dictation, EN+HE, translation modes, AI cleanup presets,
+snippets, custom vocabulary, icy "Frostpane" UI) plus a marketing/sales site and a
+full commercial plan. Cross-platform (iOS/Windows/Android) is scaffolded, not built.
+See **[docs/STATUS.md](docs/STATUS.md)** for the honest what's-done / what's-next, and
+**[docs/plans/2026-06-21-voicely-master-strategy.md](docs/plans/2026-06-21-voicely-master-strategy.md)** for the plan.
 
-The plan is complete and the entire pure-logic core is built and verified (74 checks).
-The app shell (UI + OS integration) needs **Xcode** installed — see `BUILD.md`.
+## Build & run
+```bash
+./scripts/install.sh                 # build + sign + install to /Applications
+open /Applications/Voicely.app
+./scripts/make-dmg.sh                # → dist/Voicely.dmg (installer)
+cd VoicelyCore && swift test         # pure-logic tests (92 checks)
+```
 
-Built standing on the shoulders of the MIT-licensed
-[Pindrop](https://github.com/watzon/pindrop) and [Hex](https://github.com/kitlangton/Hex),
-with [WhisperKit](https://github.com/argmaxinc/WhisperKit) and
+macOS 14+ · Apple Silicon · requires Microphone, Accessibility, Input Monitoring.
+
+## Layout
+```
+App/             the macOS app (Capture · Transcribe · Refine · Insert · UI · Settings)
+VoicelyCore/     pure, tested logic (Swift package)
+site/            icy marketing + sales landing page (static, deployable)
+platforms/       cross-platform scaffold + plan (iOS / Windows / Android)
+scripts/         install · make-dmg · make-signing-identity · verify
+docs/            plans · research · specs · STATUS
+```
+
+Built on the MIT-licensed [Pindrop](https://github.com/watzon/pindrop) +
+[Hex](https://github.com/kitlangton/Hex), with
+[WhisperKit](https://github.com/argmaxinc/WhisperKit) and
 [FluidAudio](https://github.com/FluidInference/FluidAudio).
+
+© 2026 Voicely. Free unlimited dictation; Pro $8/mo · $60/yr · $99 lifetime.
