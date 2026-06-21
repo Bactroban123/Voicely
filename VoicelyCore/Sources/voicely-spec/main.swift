@@ -105,6 +105,119 @@ do { // system prompt assembly
     check(empty.contains("(none)"), "system: empty vocab still well-formed")
 }
 
+print("Pipeline")
+
+do { // happy path with cleanup on
+    var p = Pipeline(cleanupEnabled: true)
+    check(p.handle(.startedRecording) == .none, "pipeline: start recording")
+    check(p.state == .recording, "pipeline: in recording")
+    check(p.handle(.stoppedRecording) == .beginTranscription, "pipeline: stop → transcribe")
+    check(p.handle(.transcript("hello")) == .beginCleanup("hello"), "pipeline: transcript → cleanup (on)")
+    check(p.state == .refining, "pipeline: in refining")
+    check(p.handle(.cleaned("Hello.")) == .insert("Hello."), "pipeline: cleaned → insert")
+    check(p.handle(.inserted) == .none, "pipeline: inserted → idle")
+    check(p.state == .idle, "pipeline: back to idle")
+}
+do { // cleanup off inserts raw
+    var p = Pipeline(cleanupEnabled: false)
+    _ = p.handle(.startedRecording); _ = p.handle(.stoppedRecording)
+    check(p.handle(.transcript("raw text")) == .insert("raw text"), "pipeline: cleanup off → insert raw")
+    check(p.state == .inserting, "pipeline: skips refining when cleanup off")
+}
+do { // cleanup failure falls back to raw (never lose the transcript)
+    var p = Pipeline(cleanupEnabled: true)
+    _ = p.handle(.startedRecording); _ = p.handle(.stoppedRecording)
+    _ = p.handle(.transcript("kept raw"))
+    check(p.handle(.cleanupFailed) == .insert("kept raw"), "pipeline: cleanup fail → insert raw fallback")
+}
+do { // cancel from anywhere
+    var p = Pipeline(cleanupEnabled: true)
+    _ = p.handle(.startedRecording)
+    check(p.handle(.cancelled) == .none, "pipeline: cancel → none")
+    check(p.state == .idle, "pipeline: cancel returns to idle")
+}
+do { // transcription failure goes idle with nothing pending
+    var p = Pipeline(cleanupEnabled: true)
+    _ = p.handle(.startedRecording); _ = p.handle(.stoppedRecording)
+    check(p.handle(.transcriptionFailed) == .none, "pipeline: transcription fail → none")
+    check(p.state == .idle, "pipeline: transcription fail → idle")
+}
+
+print("Insertion")
+
+do { // plan ordering
+    check(InsertPlan.methods(axFirst: true) == [.accessibility, .paste, .copyOnly], "insert: ax-first plan")
+    check(InsertPlan.methods(axFirst: false) == [.paste, .copyOnly], "insert: paste-first plan")
+}
+do { // resolution
+    let axWins = InsertPlan.resolve([.accessibility, .paste, .copyOnly]) { $0 == .accessibility }
+    check(axWins == .inserted(.accessibility), "insert: AX succeeds first")
+    let pasteWins = InsertPlan.resolve([.accessibility, .paste, .copyOnly]) { $0 == .paste }
+    check(pasteWins == .inserted(.paste), "insert: falls through to paste")
+    let copyOnly = InsertPlan.resolve([.paste, .copyOnly]) { _ in false }
+    check(copyOnly == .copiedOnly, "insert: everything fails → copy-only")
+}
+
+print("ModelCatalog")
+
+do {
+    check(ModelCatalog.transcription.count == 4, "models: 4 transcription options")
+    check(ModelCatalog.cleanup.count == 4, "models: 4 cleanup options")
+    check(ModelCatalog.transcriptionModel(id: ModelCatalog.defaultTranscriptionID) != nil,
+          "models: default transcription id exists in list")
+    check(ModelCatalog.cleanupModel(id: ModelCatalog.defaultCleanupID) != nil,
+          "models: default cleanup id exists in list")
+    let tIDs = Set(ModelCatalog.transcription.map { $0.id })
+    check(tIDs.count == ModelCatalog.transcription.count, "models: transcription ids unique")
+    let cIDs = Set(ModelCatalog.cleanup.map { $0.id })
+    check(cIDs.count == ModelCatalog.cleanup.count, "models: cleanup ids unique")
+}
+
+print("CleanupRequest")
+
+do {
+    let req = CleanupRequest(modelID: "google/gemini-2.5-flash-lite",
+                             systemPrompt: "SYS", transcript: "hello world")
+    let data = try! req.jsonData()
+    let obj = try! JSONSerialization.jsonObject(with: data) as! [String: Any]
+    check(obj["model"] as? String == "google/gemini-2.5-flash-lite", "request: model set")
+    let msgs = obj["messages"] as! [[String: Any]]
+    check(msgs.count == 2, "request: two messages")
+    check(msgs[0]["role"] as? String == "system" && msgs[0]["content"] as? String == "SYS", "request: system message")
+    check(msgs[1]["role"] as? String == "user" && msgs[1]["content"] as? String == "hello world", "request: user transcript")
+    check((obj["temperature"] as? Double) == 0.1, "request: temperature 0.1")
+    check((obj["max_tokens"] as? Int) == 400, "request: max_tokens 400")
+    check((obj["stream"] as? Bool) == true, "request: streaming on")
+    let reasoning = obj["reasoning"] as! [String: Any]
+    check((reasoning["enabled"] as? Bool) == false, "request: reasoning disabled")
+    let provider = obj["provider"] as! [String: Any]
+    check(provider["sort"] as? String == "latency", "request: provider sort latency")
+    check(provider["data_collection"] as? String == "deny", "request: data_collection deny (zdr default)")
+    check((provider["zdr"] as? Bool) == true, "request: zdr on by default")
+
+    let open = CleanupRequest(modelID: "m", systemPrompt: "s", transcript: "t", zeroRetention: false)
+    let oobj = try! JSONSerialization.jsonObject(with: open.jsonData()) as! [String: Any]
+    let oprov = oobj["provider"] as! [String: Any]
+    check(oprov["data_collection"] as? String == "allow" && (oprov["zdr"] as? Bool) == false,
+          "request: zeroRetention=false relaxes routing")
+}
+
+print("SSE")
+
+do {
+    check(SSE.delta(fromDataLine: #"data: {"choices":[{"delta":{"content":"Hel"}}]}"#) == "Hel",
+          "sse: extracts content delta")
+    check(SSE.delta(fromDataLine: "data: [DONE]") == nil, "sse: [DONE] yields nil")
+    check(SSE.delta(fromDataLine: ": keep-alive") == nil, "sse: comment line yields nil")
+    check(SSE.delta(fromDataLine: #"data: {"choices":[{"delta":{}}]}"#) == nil, "sse: empty delta yields nil")
+    let lines = [
+        #"data: {"choices":[{"delta":{"content":"Send "}}]}"#,
+        #"data: {"choices":[{"delta":{"content":"the thing."}}]}"#,
+        "data: [DONE]",
+    ]
+    check(SSE.assemble(lines) == "Send the thing.", "sse: assembles streamed deltas")
+}
+
 if failures == 0 {
     print("\nALL PASS — \(passes) checks")
     exit(0)
