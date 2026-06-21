@@ -20,7 +20,7 @@ final class RecordingController {
     private var pendingSamples: [Float] = []
 
     private let recorder = AudioRecorder()
-    private let engine: TranscriptionEngine = ParakeetEngine(version: .v2)
+    private var engine: TranscriptionEngine = ParakeetEngine(version: .v2)
     private let inserter = TextInserter()
     private let cleanup = CleanupService()
     private lazy var monitor = KeyEventMonitor { [weak self] event in
@@ -29,10 +29,29 @@ final class RecordingController {
 
     /// Returns false if the event tap couldn't start (Input Monitoring not granted).
     func start() -> Bool {
-        hotKey = HotKeyProcessor(config: HotKeyConfig(hotKeyCode: UInt16(settings.hotKeyCode)))
         recorder.onLevel = { [weak self] level in self?.onLevel?(level) }
-        Task { [engine] in try? await engine.prepare() } // warm-load
+        reconfigure()
+        NotificationCenter.default.addObserver(forName: .voicelySettingsChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.reconfigure()
+        }
         return monitor.start()
+    }
+
+    /// Re-read settings: hotkey and the selected on-device engine.
+    private func reconfigure() {
+        hotKey = HotKeyProcessor(config: HotKeyConfig(hotKeyCode: UInt16(settings.hotKeyCode)))
+        engine = Self.makeEngine(for: settings.transcriptionModelID)
+        Task { [engine] in try? await engine.prepare() } // warm-load
+    }
+
+    private static func makeEngine(for modelID: String) -> TranscriptionEngine {
+        switch modelID {
+        case "parakeet-multi":
+            return ParakeetEngine(version: .v3)
+        default:
+            // parakeet-en is the default; Whisper / Apple Speech engines land next.
+            return ParakeetEngine(version: .v2)
+        }
     }
 
     // MARK: - Hotkey

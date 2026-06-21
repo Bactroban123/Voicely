@@ -1,6 +1,11 @@
 import Foundation
 import VoicelyCore
 
+extension Notification.Name {
+    /// Posted when settings are saved so the controller can reconfigure live.
+    static let voicelySettingsChanged = Notification.Name("VoicelySettingsChanged")
+}
+
 /// Small UserDefaults-backed preferences. Secrets (the OpenRouter key) live in
 /// the Keychain, not here. Custom vocabulary lives in a JSON file.
 final class SettingsStore {

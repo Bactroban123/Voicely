@@ -5,22 +5,9 @@ struct VoicelyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        Settings {
-            SettingsPlaceholderView()
-        }
-    }
-}
-
-private struct SettingsPlaceholderView: View {
-    var body: some View {
-        VStack(spacing: 8) {
-            Text("Voicely")
-                .font(.title2)
-                .fontWeight(.medium)
-            Text("Settings coming soon.")
-                .foregroundStyle(.secondary)
-        }
-        .frame(width: 380, height: 220)
-        .padding()
+        // The app is menu-bar-only; the real settings open from the status menu
+        // via SettingsWindowController (the SwiftUI Settings scene's openSettings
+        // is broken on macOS 26 Tahoe). This empty scene just satisfies App.
+        Settings { EmptyView() }
     }
 }
