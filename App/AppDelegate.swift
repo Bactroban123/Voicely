@@ -19,7 +19,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         controller.onStateChange = { [weak self] state in
             self?.updateIcon(state)
-            self?.statusLabel?.title = state == .recording ? "Voicely — listening" : "Voicely — idle"
+            switch state {
+            case .idle: self?.statusLabel?.title = "Voicely — idle"
+            case .recording: self?.statusLabel?.title = "Voicely — listening"
+            case .processing: self?.statusLabel?.title = "Voicely — transcribing…"
+            }
         }
 
         if !controller.start() {
@@ -50,11 +54,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateIcon(_ state: RecordingController.UIState) {
-        let recording = state == .recording
-        let symbol = recording ? "waveform.circle.fill" : "waveform"
+        let symbol: String
+        let active: Bool
+        switch state {
+        case .idle: symbol = "waveform"; active = false
+        case .recording: symbol = "waveform.circle.fill"; active = true
+        case .processing: symbol = "waveform.circle"; active = true
+        }
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Voicely")
-        image?.isTemplate = !recording
+        image?.isTemplate = !active
         statusItem?.button?.image = image
-        statusItem?.button?.contentTintColor = recording ? NSColor.systemOrange : nil
+        statusItem?.button?.contentTintColor = active ? NSColor.systemOrange : nil
     }
 }

@@ -7,6 +7,9 @@ options:
 packages:
   VoicelyCore:
     path: VoicelyCore
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio
+    from: "0.15.0"
 targets:
   Voicely:
     type: application
@@ -16,6 +19,8 @@ targets:
     dependencies:
       - package: VoicelyCore
         product: VoicelyCore
+      - package: FluidAudio
+        product: FluidAudio
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.voicely.app
