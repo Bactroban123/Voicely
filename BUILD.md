@@ -1,54 +1,53 @@
 # Voicely — Build & Status
 
-## Where things stand (June 21 2026)
+## Status (June 21 2026): full app built, installed, awaiting first-run permissions
 
 | Layer | Status |
 |---|---|
-| Research (5-agent sweep) | ✅ `docs/research/2026-06-21-research-findings.md` |
-| Design spec | ✅ `docs/specs/2026-06-21-voicely-design.md` |
-| Execution plan (6 phases) | ✅ `docs/plans/2026-06-21-voicely-execution-plan.md` |
-| Interface + identity | ✅ `DESIGN.md` (warm-amber), `PRODUCT.md` |
-| **VoicelyCore — hotkey state machine** | ✅ built + verified (tap/hold/lock) |
-| **VoicelyCore — cleanup prompt + vocabulary** | ✅ built + verified |
-| App shell (.app: UI, CGEventTap, audio, HUD, signing) | ⛔ blocked on Xcode (see below) |
+| Research / Spec / Plan / Design | ✅ `docs/`, `PRODUCT.md`, `DESIGN.md` |
+| VoicelyCore (pure logic) | ✅ 74 checks; `swift test` = 36 XCTest, 0 failures |
+| Phase 0 scaffold (menu-bar app) | ✅ builds |
+| Phase 1 hotkey + mic + permissions | ✅ builds |
+| Phase 2+3 on-device transcription + paste | ✅ builds |
+| Phase 4 AI cleanup (OpenRouter) | ✅ builds |
+| Phase 5 HUD + Settings + launch-at-login | ✅ builds |
+| **Installed** | ✅ `/Applications/Voicely.app` (ad-hoc signed) |
+| First-run permissions + real dictation test | ⏳ needs the user (TCC grants + model download) |
 
-## Environment note (important)
+Xcode 26.5 is installed and active; `xcodebuild` and `swift test` work.
 
-This machine has **Command Line Tools only — no Xcode**. Consequences:
-- SwiftPM (`swift build` / `swift test` / `swift run`) **fails** on macOS targets here (it needs Xcode's macOS *platform* bundle: `xcrun --show-sdk-platform-path` errors).
-- The Swift **compiler works**, so the pure-logic core is verified by compiling directly with `swiftc`.
+## Build / install / test
 
-### Verify the core right now (CLT only)
 ```bash
-cd VoicelyCore && ./scripts/verify.sh      # compiles VoicelyCore + spec, runs all checks
+cd VoicelyCore && swift test          # pure-logic suite (36 tests)
+./scripts/install.sh                   # build + ad-hoc sign + install to /Applications
+open /Applications/Voicely.app         # launch (menu-bar icon appears)
 ```
-Expected: `ALL PASS — 31 checks`.
 
-## To unblock the full app (one-time, on your Mac)
+### First-run permissions (one time)
+Voicely needs three macOS permissions. On launch it requests all three:
+1. **Microphone** — click Allow on the prompt.
+2. **Accessibility** (to paste at the cursor) — System Settings ▸ Privacy & Security ▸ Accessibility ▸ turn **Voicely** on.
+3. **Input Monitoring** (for the global hotkey) — System Settings ▸ Privacy & Security ▸ Input Monitoring ▸ turn **Voicely** on.
 
-1. **Install Xcode** from the App Store (or `xcodes install`), then:
-   ```bash
-   sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-   xcodebuild -version    # should now work
-   ```
-2. With Xcode present, the normal toolchain works:
-   ```bash
-   cd VoicelyCore && swift test     # runs the XCTest suite
-   ```
-3. Create the app target (Phase 0 of the execution plan): an Xcode macOS App that
-   depends on the local `VoicelyCore` package, plus SPM deps WhisperKit
-   (`argmaxinc/argmax-oss-swift`), FluidAudio, KeyboardShortcuts, SettingsAccess, Sauce.
-   Set `LSUIElement`, non-sandboxed entitlements, `NSMicrophoneUsageDescription`, a stable
-   signing identity. (Details: execution plan, Phase 0.)
+Accessibility + Input Monitoring take effect only after you **quit and reopen** Voicely.
+
+### Using it
+- Default hotkey **Right Option (⌥)**: tap to toggle recording, or hold to push-to-talk; `esc` cancels.
+- First dictation downloads the Parakeet model (~hundreds of MB) — it lags once, then is fast.
+- AI cleanup is **off** by default. Turn it on in Settings and paste your OpenRouter key to enable punctuation/filler cleanup + custom-vocabulary correction.
+
+## Known limitations (next up)
+- Signing is **ad-hoc** → permissions may need re-approval after each rebuild. A free Apple Development cert (sign into Xcode) gives a stable identity that avoids this.
+- The transcription model picker wires **Parakeet (English/Multilingual)** today; Whisper + Apple Speech engines are the next engines to implement.
+- Cleanup is non-streaming v1; streaming paste is a planned enhancement.
 
 ## Layout
 ```
 docs/            research · specs · plans
-PRODUCT.md       product context (for /impeccable)
-DESIGN.md        visual tokens (warm amber)
-VoicelyCore/     SwiftPM package (pure, testable logic)
-  Sources/VoicelyCore/   HotKeyProcessor, CleanupPrompt, Vocabulary
-  Sources/voicely-spec/  runnable spec (CLT verification)
-  Tests/                 XCTest suite (Xcode)
-  scripts/verify.sh      swiftc-based verification (no Xcode needed)
+PRODUCT.md DESIGN.md   product + visual identity
+VoicelyCore/     pure logic (Swift package) — scripts/verify.sh, swift test
+App/             the macOS app (Capture · Transcribe · Refine · Insert · UI · Settings)
+project.yml      XcodeGen spec (regenerate: xcodegen generate)
+scripts/install.sh   build + sign + install
 ```

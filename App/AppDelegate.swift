@@ -34,9 +34,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         controller.onLevel = { [weak self] level in self?.hud.update(level: level) }
 
+        // First-run onboarding: request all three permissions so they show clean
+        // system prompts and register Voicely in System Settings. Accessibility +
+        // Input Monitoring take effect only after a relaunch.
+        PermissionManager.requestMicrophone { _ in }
+        _ = PermissionManager.accessibilityTrusted(prompt: true)
+        PermissionManager.requestInputMonitoring()
+
         if !controller.start() {
-            // Input Monitoring not granted yet: guide the user to grant it.
-            PermissionManager.requestInputMonitoring()
             PermissionManager.openSystemSettings(.inputMonitoring)
         }
     }
