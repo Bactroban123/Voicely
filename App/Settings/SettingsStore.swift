@@ -51,4 +51,9 @@ final class SettingsStore {
         get { defaults.object(forKey: Key.zeroRetention) as? Bool ?? true }
         set { defaults.set(newValue, forKey: Key.zeroRetention) }
     }
+
+    var hasOnboarded: Bool {
+        get { defaults.bool(forKey: "hasOnboarded") }
+        set { defaults.set(newValue, forKey: "hasOnboarded") }
+    }
 }

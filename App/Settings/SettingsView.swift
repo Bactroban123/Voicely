@@ -77,10 +77,12 @@ struct SettingsView: View {
                     model.save()
                     onClose?()
                 }
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
             }
             .padding(12)
         }
         .frame(width: 460, height: 680)
+        .tint(Color(red: 0.227, green: 0.659, blue: 0.788)) // Frostpane glacier #3AA8C9
     }
 }

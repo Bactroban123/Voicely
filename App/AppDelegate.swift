@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let controller = RecordingController()
     private let hud = HUDController()
     private let settingsWindow = SettingsWindowController()
+    private let onboarding = OnboardingWindowController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -36,14 +37,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         controller.onLevel = { [weak self] level in self?.hud.update(level: level) }
 
-        // First-run onboarding: request all three permissions so they show clean
-        // system prompts and register Voicely in System Settings. Accessibility +
-        // Input Monitoring take effect only after a relaunch.
-        PermissionManager.requestMicrophone { _ in }
-        _ = PermissionManager.accessibilityTrusted(prompt: true)
-        PermissionManager.requestInputMonitoring()
+        // Existing users (already have a key) skip onboarding; only fresh installs see it.
+        let onboarded = SettingsStore.shared.hasOnboarded
+            || (KeychainStore.openRouterKey()?.isEmpty == false)
+        if onboarded {
+            // Returning user: make sure the permissions are registered (prompts if needed).
+            PermissionManager.requestMicrophone { _ in }
+            _ = PermissionManager.accessibilityTrusted(prompt: true)
+            PermissionManager.requestInputMonitoring()
+        } else {
+            // First run: a guided Frostpane welcome drives the permissions + key.
+            onboarding.show { SettingsStore.shared.hasOnboarded = true }
+        }
 
-        if !controller.start() {
+        let started = controller.start()
+        if onboarded && !started {
             PermissionManager.openSystemSettings(.inputMonitoring)
         }
     }
