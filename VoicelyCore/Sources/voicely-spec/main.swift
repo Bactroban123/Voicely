@@ -261,6 +261,32 @@ do {
     check(unknown.contains("editor, not an assistant"), "modes: unknown id falls back to clean")
 }
 
+print("History")
+
+do {
+    let t = Date(timeIntervalSince1970: 1000)
+    var h: [HistoryEntry] = []
+    h = History.add("  hello  ", to: h, now: t)
+    check(h.count == 1 && h[0].text == "hello", "history: trims and adds")
+    h = History.add("   ", to: h, now: t)
+    check(h.count == 1, "history: ignores empty/whitespace")
+    h = History.add("hello", to: h, now: t)
+    check(h.count == 1, "history: de-dupes immediate repeat")
+    h = History.add("world", to: h, now: t)
+    check(h.count == 2 && h[0].text == "world", "history: newest first")
+
+    var capped: [HistoryEntry] = []
+    for i in 0..<10 { capped = History.add("item \(i)", to: capped, now: t, cap: 3) }
+    check(capped.count == 3 && capped[0].text == "item 9", "history: caps to newest N")
+
+    let list = [HistoryEntry(text: "Send Gal the report", date: t),
+                HistoryEntry(text: "buy milk", date: t)]
+    check(History.search("GAL", in: list).count == 1, "history: search is case-insensitive")
+    check(History.search("", in: list).count == 2, "history: empty query returns all")
+    check(History.preview("line one\nline two") == "line one line two", "history: preview flattens newlines")
+    check(History.preview(String(repeating: "a", count: 60), max: 10).hasSuffix("…"), "history: preview truncates")
+}
+
 if failures == 0 {
     print("\nALL PASS — \(passes) checks")
     exit(0)

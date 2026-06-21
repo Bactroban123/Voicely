@@ -147,6 +147,7 @@ final class RecordingController {
     private func performInsert(_ text: String) {
         if !text.isEmpty {
             inserter.insert(text)
+            HistoryStore.shared.record(text)
             onTranscript?(text)
             NSLog("Voicely inserted: %@", text)
         }
