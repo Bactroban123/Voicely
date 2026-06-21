@@ -25,8 +25,14 @@ public enum CleanupModes {
     public static let prompt = CleanupMode(
         id: "prompt", name: "Prompt",
         detail: "Reshapes your dictation into a clean AI prompt.")
+    public static let translateEN = CleanupMode(
+        id: "translate-en", name: "Translate → English",
+        detail: "Speak any language; insert fluent English.")
+    public static let translateHE = CleanupMode(
+        id: "translate-he", name: "Translate → Hebrew",
+        detail: "Speak any language; insert fluent Hebrew (עברית).")
 
-    public static let all: [CleanupMode] = [clean, polish, prompt]
+    public static let all: [CleanupMode] = [clean, polish, prompt, translateEN, translateHE]
     public static let defaultID = "clean"
 
     public static func mode(id: String) -> CleanupMode? {
@@ -37,6 +43,8 @@ public enum CleanupModes {
         switch modeID {
         case "polish": return polishPrompt(vocabulary)
         case "prompt": return promptPrompt(vocabulary)
+        case "translate-en": return translatePrompt(target: "English", vocabulary: vocabulary)
+        case "translate-he": return translatePrompt(target: "Hebrew (עברית)", vocabulary: vocabulary)
         default: return CleanupPrompt.system(vocabulary: vocabulary) // clean
         }
     }
@@ -61,6 +69,22 @@ public enum CleanupModes {
         opinions, or information the speaker did not express. Keep it natural, not stiff or formal.
         5. Apply the custom vocabulary corrections below.
         6. Output ONLY the polished text. No preamble, quotes, markdown fences, or commentary.
+
+        \(vocabularyBlock(vocabulary))
+        """
+    }
+
+    private static func translatePrompt(target: String, vocabulary: [VocabularyEntry]) -> String {
+        """
+        You are a translation engine. Translate the transcript into natural, fluent \(target).
+
+        RULES — follow exactly:
+        1. Produce idiomatic \(target), not a word-for-word translation. Convey the speaker's meaning and tone.
+        2. Remove speech fillers and false starts. Use correct punctuation and casing for \(target).
+        3. Keep proper nouns, people's names, code, URLs, and email addresses unchanged — do not translate \
+        them. Apply the custom-vocabulary spellings below to any that appear.
+        4. If the transcript is already in \(target), simply clean it up — do not re-translate or paraphrase.
+        5. Output ONLY the \(target) text. No preamble, quotes, transliteration, notes, or the original.
 
         \(vocabularyBlock(vocabulary))
         """

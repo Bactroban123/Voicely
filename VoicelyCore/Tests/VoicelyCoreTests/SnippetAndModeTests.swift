@@ -30,9 +30,14 @@ final class SnippetExpanderTests: XCTestCase {
 final class CleanupModesTests: XCTestCase {
     private let vocab = [VocabularyEntry(term: "Vercel")]
 
-    func testThreePresetsWithDefault() {
-        XCTAssertEqual(CleanupModes.all.count, 3)
+    func testPresetsWithDefault() {
+        XCTAssertEqual(CleanupModes.all.count, 5)
         XCTAssertNotNil(CleanupModes.mode(id: CleanupModes.defaultID))
+    }
+    func testTranslateModes() {
+        XCTAssertTrue(CleanupModes.system(modeID: "translate-en", vocabulary: vocab).contains("fluent English"))
+        XCTAssertTrue(CleanupModes.system(modeID: "translate-he", vocabulary: vocab).contains("Hebrew"))
+        XCTAssertTrue(CleanupModes.system(modeID: "translate-en", vocabulary: vocab).contains("- Vercel"))
     }
     func testCleanUsesConservativePrompt() {
         XCTAssertTrue(CleanupModes.system(modeID: "clean", vocabulary: vocab).contains("editor, not an assistant"))

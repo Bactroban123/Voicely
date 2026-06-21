@@ -241,7 +241,7 @@ do { // expansion with regex-special chars is literal
 print("CleanupModes")
 
 do {
-    check(CleanupModes.all.count == 3, "modes: three presets")
+    check(CleanupModes.all.count == 5, "modes: five presets (clean/polish/prompt/translate x2)")
     check(CleanupModes.mode(id: CleanupModes.defaultID) != nil, "modes: default id exists")
     let vocab = [VocabularyEntry(term: "Vercel")]
     let clean = CleanupModes.system(modeID: "clean", vocabulary: vocab)
@@ -252,6 +252,11 @@ do {
     let prompt = CleanupModes.system(modeID: "prompt", vocabulary: vocab)
     check(prompt.contains("prompt-engineering"), "modes: prompt reshapes into an AI prompt")
     check(prompt.contains("- Vercel"), "modes: prompt injects vocabulary")
+    let tEN = CleanupModes.system(modeID: "translate-en", vocabulary: vocab)
+    check(tEN.contains("fluent English"), "modes: translate-en targets English")
+    check(tEN.contains("- Vercel"), "modes: translate-en injects vocabulary")
+    let tHE = CleanupModes.system(modeID: "translate-he", vocabulary: vocab)
+    check(tHE.contains("Hebrew"), "modes: translate-he targets Hebrew")
     let unknown = CleanupModes.system(modeID: "nope", vocabulary: vocab)
     check(unknown.contains("editor, not an assistant"), "modes: unknown id falls back to clean")
 }
