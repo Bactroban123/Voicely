@@ -26,7 +26,13 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r app/requirements.txt pyinstaller
+          pip install -r app/requirements.txt pyinstaller pytest
+
+      - name: Unit tests (core logic on Windows)
+        run: python -m pytest tests -q
+
+      - name: Import smoke (all runtime deps load on Windows)
+        run: python tests/import_smoke.py
 
       - name: Generate icon
         run: python app/gen_icon.py
@@ -42,6 +48,24 @@ jobs:
           --hidden-import pystray._win32
           --hidden-import PIL.ImageDraw
           app/main.py
+
+      - name: Smoke test the built exe (boots without crashing on Windows)
+        shell: pwsh
+        run: |
+          $dir = "$env:APPDATA\MyBeautifulWife"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          '{"openrouter_key":"sk-or-smoketest"}' | Set-Content -Encoding utf8 "$dir\config.json"
+          Remove-Item "$dir\log.txt" -ErrorAction SilentlyContinue
+          $env:MBW_SMOKE = "1"
+          $p = Start-Process -FilePath "dist\MyBeautifulWife.exe" -PassThru -Wait
+          Write-Host "exit code: $($p.ExitCode)"
+          $log = ""
+          if (Test-Path "$dir\log.txt") { $log = Get-Content "$dir\log.txt" -Raw }
+          Write-Host "---- app log ----"
+          Write-Host $log
+          if ($p.ExitCode -ne 0) { Write-Error "frozen exe exited non-zero"; exit 1 }
+          if ($log -notmatch "SMOKE OK") { Write-Error "frozen exe did not reach SMOKE OK (startup crash)"; exit 1 }
+          Write-Host "SMOKE PASSED: the frozen app boots and wires up on Windows."
 
       - name: Build installer (Inno Setup)
         run: |

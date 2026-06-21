@@ -5,22 +5,17 @@ Press the hotkey (default Ctrl+Alt+Space) to start listening, speak, press it
 again to stop. The audio is transcribed (and optionally cleaned up) through the
 OpenRouter API, and the text is typed wherever the cursor is.
 
-Everything is intentionally simple and defensive: it should never crash, and any
-problem shows up as a tray notification and in the log file. The OpenRouter key
-lives only in this PC's user folder (never in the code).
+This file owns the platform I/O (audio, global hotkey, clipboard, tray, dialogs).
+All the pure logic lives in core.py and is unit-tested.
 """
 
 from __future__ import annotations
 
-import base64
-import io
-import json
 import logging
 import os
 import threading
 import time
 import traceback
-import wave
 
 import numpy as np
 import requests
@@ -30,51 +25,17 @@ import keyboard
 import pystray
 from PIL import Image, ImageDraw
 
-APP_NAME = "My Beautiful Wife"
+import core
+
+APP_NAME = core.APP_TITLE
 APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "MyBeautifulWife")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "log.txt")
 
-OPENROUTER_BASE = "https://openrouter.ai/api/v1"
-SAMPLE_RATE = 16000
-
-DEFAULT_CONFIG = {
-    "openrouter_key": "",
-    "hotkey": "ctrl+alt+space",
-    "transcribe_model": "openai/whisper-1",
-    "cleanup": True,
-    "cleanup_model": "google/gemini-2.5-flash-lite",
-    "language": "",  # "" = auto-detect; or "en", "he", etc.
-}
-
 os.makedirs(APP_DIR, exist_ok=True)
-logging.basicConfig(
-    filename=LOG_PATH,
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)s  %(message)s",
-)
+logging.basicConfig(filename=LOG_PATH, level=logging.INFO,
+                    format="%(asctime)s  %(levelname)s  %(message)s")
 log = logging.getLogger(APP_NAME)
-
-
-# --------------------------------------------------------------------------- config
-
-def load_config() -> dict:
-    cfg = dict(DEFAULT_CONFIG)
-    try:
-        if os.path.exists(CONFIG_PATH):
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                cfg.update(json.load(f))
-    except Exception:
-        log.exception("failed to read config; using defaults")
-    return cfg
-
-
-def save_config(cfg: dict) -> None:
-    try:
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(cfg, f, indent=2)
-    except Exception:
-        log.exception("failed to write config")
 
 
 def ask_for_key(current: str = "") -> str | None:
@@ -87,10 +48,8 @@ def ask_for_key(current: str = "") -> str | None:
         root.withdraw()
         root.attributes("-topmost", True)
         value = simpledialog.askstring(
-            APP_NAME,
-            "Paste your OpenRouter API key (starts with sk-or-):",
-            initialvalue=current,
-            parent=root,
+            APP_NAME, "Paste your OpenRouter API key (starts with sk-or-):",
+            initialvalue=current, parent=root,
         )
         root.destroy()
         if value:
@@ -99,8 +58,6 @@ def ask_for_key(current: str = "") -> str | None:
         log.exception("key dialog failed")
     return None
 
-
-# --------------------------------------------------------------------------- audio
 
 class Recorder:
     def __init__(self):
@@ -119,12 +76,10 @@ class Recorder:
                 self._frames.append(indata.copy())
 
         self._stream = sd.InputStream(
-            samplerate=SAMPLE_RATE, channels=1, dtype="int16", callback=callback
-        )
+            samplerate=core.SAMPLE_RATE, channels=1, dtype="int16", callback=callback)
         self._stream.start()
 
     def stop(self) -> bytes:
-        """Stop and return a 16 kHz mono WAV as bytes (empty if nothing/too short)."""
         if self._stream is not None:
             try:
                 self._stream.stop()
@@ -137,81 +92,8 @@ class Recorder:
             self._frames = []
         if not frames:
             return b""
-        audio = np.concatenate(frames, axis=0)
-        if audio.shape[0] < SAMPLE_RATE * 0.3:  # < 0.3s, ignore
-            return b""
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)  # int16
-            wf.setframerate(SAMPLE_RATE)
-            wf.writeframes(audio.tobytes())
-        return buf.getvalue()
+        return core.build_wav(np.concatenate(frames, axis=0))
 
-
-# --------------------------------------------------------------------------- openrouter
-
-def transcribe(wav_bytes: bytes, cfg: dict) -> str:
-    b64 = base64.b64encode(wav_bytes).decode("ascii")
-    body = {
-        "model": cfg["transcribe_model"],
-        "input_audio": {"data": b64, "format": "wav"},
-    }
-    if cfg.get("language"):
-        body["language"] = cfg["language"]
-    r = requests.post(
-        f"{OPENROUTER_BASE}/audio/transcriptions",
-        headers={
-            "Authorization": f"Bearer {cfg['openrouter_key']}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/Bactroban123/Voicely",
-            "X-Title": APP_NAME,
-        },
-        json=body,
-        timeout=120,
-    )
-    r.raise_for_status()
-    return (r.json().get("text") or "").strip()
-
-
-def cleanup(text: str, cfg: dict) -> str:
-    """Best-effort punctuation/filler cleanup. Returns raw text on any error."""
-    try:
-        system = (
-            "You are a dictation cleanup engine. Return a corrected version of the "
-            "SAME text: fix punctuation, capitalization and obvious spacing, remove "
-            "filler words ('um', 'uh', false starts). Do NOT translate, answer, add, "
-            "or summarize. Preserve the speaker's language and meaning. Output ONLY "
-            "the cleaned text."
-        )
-        r = requests.post(
-            f"{OPENROUTER_BASE}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {cfg['openrouter_key']}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://github.com/Bactroban123/Voicely",
-                "X-Title": APP_NAME,
-            },
-            json={
-                "model": cfg["cleanup_model"],
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": text},
-                ],
-                "temperature": 0.1,
-                "max_tokens": 1000,
-            },
-            timeout=60,
-        )
-        r.raise_for_status()
-        out = (r.json()["choices"][0]["message"]["content"] or "").strip()
-        return out or text
-    except Exception:
-        log.exception("cleanup failed; using raw transcript")
-        return text
-
-
-# --------------------------------------------------------------------------- typing
 
 def type_text(text: str) -> None:
     """Paste text at the cursor via the clipboard (handles Unicode/Hebrew)."""
@@ -235,24 +117,19 @@ def type_text(text: str) -> None:
                 pass
 
 
-# --------------------------------------------------------------------------- icons
-
 def make_icon(recording: bool) -> Image.Image:
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    color = (34, 211, 238, 255) if not recording else (226, 75, 74, 255)  # cyan / red
-    # a small heart
+    color = (226, 75, 74, 255) if recording else (34, 211, 238, 255)  # red / icy cyan
     d.ellipse((14, 16, 34, 36), fill=color)
     d.ellipse((30, 16, 50, 36), fill=color)
     d.polygon([(16, 30), (48, 30), (32, 52)], fill=color)
     return img
 
 
-# --------------------------------------------------------------------------- app
-
 class App:
     def __init__(self):
-        self.cfg = load_config()
+        self.cfg = core.load_config(CONFIG_PATH)
         self.recorder = Recorder()
         self.recording = False
         self.busy = False
@@ -289,8 +166,6 @@ class App:
         except Exception:
             pass
 
-    # ---- hotkey
-
     def on_hotkey(self) -> None:
         try:
             if self.busy:
@@ -318,17 +193,17 @@ class App:
         except Exception:
             pass
         try:
-            text = transcribe(wav, self.cfg)
+            text = core.transcribe(wav, self.cfg)
             if self.cfg.get("cleanup"):
-                text = cleanup(text, self.cfg)
+                text = core.cleanup(text, self.cfg)
             if text:
                 type_text(text)
                 log.info("typed %d chars", len(text))
             else:
                 self.notify("Didn't catch that — try again.")
         except requests.HTTPError as e:
-            log.exception("HTTP error")
-            code = getattr(e.response, "status_code", "?")
+            code = getattr(getattr(e, "response", None), "status_code", "?")
+            log.exception("HTTP error %s", code)
             if code == 401:
                 self.notify("OpenRouter key was rejected. Set it again from the tray menu.")
             else:
@@ -343,14 +218,12 @@ class App:
             except Exception:
                 pass
 
-    # ---- menu actions
-
     def on_set_key(self, icon=None, item=None) -> None:
         def worker():
             key = ask_for_key(self.cfg.get("openrouter_key", ""))
             if key:
                 self.cfg["openrouter_key"] = key
-                save_config(self.cfg)
+                core.save_config(self.cfg, CONFIG_PATH)
                 self.notify("OpenRouter key saved.")
         threading.Thread(target=worker, daemon=True).start()
 
@@ -367,19 +240,23 @@ class App:
             pass
         self.icon.stop()
 
-    # ---- run
-
     def run(self) -> None:
         if not self.cfg.get("openrouter_key"):
             key = ask_for_key()
             if key:
                 self.cfg["openrouter_key"] = key
-                save_config(self.cfg)
+                core.save_config(self.cfg, CONFIG_PATH)
         try:
             keyboard.add_hotkey(self.cfg.get("hotkey", "ctrl+alt+space"), self.on_hotkey)
         except Exception:
             log.exception("failed to register hotkey")
         log.info("%s started", APP_NAME)
+        # CI smoke mode: everything is constructed and wired; exit instead of
+        # entering the blocking tray loop, so the frozen exe can be verified to
+        # boot cleanly on a headless Windows runner.
+        if os.environ.get("MBW_SMOKE"):
+            log.info("SMOKE OK")
+            return
         self.icon.run()
 
 
