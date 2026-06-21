@@ -1,0 +1,33 @@
+name: Voicely
+options:
+  bundleIdPrefix: com.voicely
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+packages:
+  VoicelyCore:
+    path: VoicelyCore
+targets:
+  Voicely:
+    type: application
+    platform: macOS
+    sources:
+      - App
+    dependencies:
+      - package: VoicelyCore
+        product: VoicelyCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.voicely.app
+        PRODUCT_NAME: Voicely
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/Voicely.entitlements
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        DEVELOPMENT_TEAM: ""
+        ENABLE_HARDENED_RUNTIME: YES
+        COMBINE_HIDPI_IMAGES: YES
