@@ -108,11 +108,12 @@ final class RecordingController {
             guard let self else { return }
             do {
                 let text = try await self.engine.transcribe(samples)
+                let expanded = SnippetExpander.expand(text, snippets: SnippetStore.shared.snippets)
                 await MainActor.run {
-                    if text.isEmpty {
+                    if expanded.isEmpty {
                         self.apply(self.pipeline.handle(.transcriptionFailed))
                     } else {
-                        self.apply(self.pipeline.handle(.transcript(text)))
+                        self.apply(self.pipeline.handle(.transcript(expanded)))
                     }
                 }
             } catch {
@@ -124,6 +125,7 @@ final class RecordingController {
 
     private func runCleanup(_ raw: String) {
         let modelID = settings.cleanupModelID
+        let modeID = settings.cleanupModeID
         let vocabulary = VocabularyStore.shared.entries
         let zeroRetention = settings.zeroRetention
         Task { [weak self] in
@@ -131,6 +133,7 @@ final class RecordingController {
             do {
                 let cleaned = try await self.cleanup.clean(raw,
                                                            modelID: modelID,
+                                                           modeID: modeID,
                                                            vocabulary: vocabulary,
                                                            zeroRetention: zeroRetention)
                 await MainActor.run { self.apply(self.pipeline.handle(.cleaned(cleaned))) }

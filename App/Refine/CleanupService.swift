@@ -15,6 +15,7 @@ final class CleanupService {
 
     func clean(_ raw: String,
                modelID: String,
+               modeID: String,
                vocabulary: [VocabularyEntry],
                zeroRetention: Bool) async throws -> String {
         guard let apiKey = KeychainStore.openRouterKey(), !apiKey.isEmpty else {
@@ -22,7 +23,7 @@ final class CleanupService {
         }
 
         let body = CleanupRequest(modelID: modelID,
-                                  systemPrompt: CleanupPrompt.system(vocabulary: vocabulary),
+                                  systemPrompt: CleanupModes.system(modeID: modeID, vocabulary: vocabulary),
                                   transcript: raw,
                                   stream: false,
                                   zeroRetention: zeroRetention)

@@ -17,7 +17,13 @@ final class SettingsStore {
         static let cleanupEnabled = "cleanupEnabled"
         static let transcriptionModelID = "transcriptionModelID"
         static let cleanupModelID = "cleanupModelID"
+        static let cleanupModeID = "cleanupModeID"
         static let zeroRetention = "zeroRetention"
+    }
+
+    var cleanupModeID: String {
+        get { defaults.string(forKey: Key.cleanupModeID) ?? CleanupModes.defaultID }
+        set { defaults.set(newValue, forKey: Key.cleanupModeID) }
     }
 
     var hotKeyCode: Int {

@@ -6,6 +6,7 @@ import VoicelyCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var statusLabel: NSMenuItem?
+    private var modeMenu: NSMenu?
     private let controller = RecordingController()
     private let hud = HUDController()
     private let settingsWindow = SettingsWindowController()
@@ -56,6 +57,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
+        let modeItem = NSMenuItem(title: "Cleanup mode", action: nil, keyEquivalent: "")
+        let modeMenu = NSMenu()
+        for mode in CleanupModes.all {
+            let item = NSMenuItem(title: mode.name, action: #selector(selectMode(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = mode.id
+            item.state = (mode.id == SettingsStore.shared.cleanupModeID) ? .on : .off
+            modeMenu.addItem(item)
+        }
+        modeItem.submenu = modeMenu
+        self.modeMenu = modeMenu
+        menu.addItem(modeItem)
+
         let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
@@ -68,6 +82,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openSettings() {
         settingsWindow.show()
+    }
+
+    @objc private func selectMode(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        SettingsStore.shared.cleanupModeID = id
+        NotificationCenter.default.post(name: .voicelySettingsChanged, object: nil)
+        modeMenu?.items.forEach { item in
+            item.state = ((item.representedObject as? String) == id) ? .on : .off
+        }
     }
 
     private func updateIcon(_ state: RecordingController.UIState) {

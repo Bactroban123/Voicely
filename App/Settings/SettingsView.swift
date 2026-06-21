@@ -34,6 +34,13 @@ struct SettingsView: View {
 
                 Section("AI cleanup") {
                     Toggle("Clean up transcripts", isOn: $model.cleanupEnabled)
+                    Picker("Mode", selection: $model.cleanupModeID) {
+                        ForEach(CleanupModes.all) { Text($0.name).tag($0.id) }
+                    }
+                    .disabled(!model.cleanupEnabled)
+                    if let mode = CleanupModes.mode(id: model.cleanupModeID) {
+                        Text(mode.detail).font(.caption).foregroundStyle(.secondary)
+                    }
                     Picker("Cleanup model", selection: $model.cleanupModelID) {
                         ForEach(ModelCatalog.cleanup) { Text($0.name).tag($0.id) }
                     }
@@ -49,7 +56,16 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                     TextEditor(text: $model.vocabularyText)
                         .font(.body)
-                        .frame(minHeight: 90)
+                        .frame(minHeight: 80)
+                }
+
+                Section("Snippets") {
+                    Text("Say the trigger, get the text. One per line: trigger => expansion. e.g. my email => gal@example.com")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextEditor(text: $model.snippetsText)
+                        .font(.body)
+                        .frame(minHeight: 70)
                 }
             }
             .formStyle(.grouped)
@@ -65,6 +81,6 @@ struct SettingsView: View {
             }
             .padding(12)
         }
-        .frame(width: 460, height: 580)
+        .frame(width: 460, height: 680)
     }
 }

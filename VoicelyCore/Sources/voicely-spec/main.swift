@@ -218,6 +218,44 @@ do {
     check(SSE.assemble(lines) == "Send the thing.", "sse: assembles streamed deltas")
 }
 
+print("SnippetExpander")
+
+do {
+    let s = [Snippet(trigger: "my email", expansion: "gal@example.com")]
+    check(SnippetExpander.expand("my email", snippets: s) == "gal@example.com", "snippet: whole-utterance expands")
+    check(SnippetExpander.expand("send it to my email please", snippets: s) == "send it to gal@example.com please",
+          "snippet: inline expansion")
+    check(SnippetExpander.expand("My Email", snippets: s) == "gal@example.com", "snippet: case-insensitive")
+    check(SnippetExpander.expand("no trigger here", snippets: s) == "no trigger here", "snippet: no match unchanged")
+    check(SnippetExpander.expand("anything", snippets: []) == "anything", "snippet: empty list unchanged")
+}
+do { // longer trigger wins
+    let s = [Snippet(trigger: "email", expansion: "E"), Snippet(trigger: "my email", expansion: "FULL")]
+    check(SnippetExpander.expand("my email", snippets: s) == "FULL", "snippet: longer trigger applied first")
+}
+do { // expansion with regex-special chars is literal
+    let s = [Snippet(trigger: "price", expansion: "$5 (50% off)")]
+    check(SnippetExpander.expand("the price", snippets: s) == "the $5 (50% off)", "snippet: special chars in expansion are literal")
+}
+
+print("CleanupModes")
+
+do {
+    check(CleanupModes.all.count == 3, "modes: three presets")
+    check(CleanupModes.mode(id: CleanupModes.defaultID) != nil, "modes: default id exists")
+    let vocab = [VocabularyEntry(term: "Vercel")]
+    let clean = CleanupModes.system(modeID: "clean", vocabulary: vocab)
+    check(clean.contains("editor, not an assistant"), "modes: clean uses the conservative prompt")
+    let polish = CleanupModes.system(modeID: "polish", vocabulary: vocab)
+    check(polish.contains("concise") || polish.contains("Tighten"), "modes: polish tightens for clarity")
+    check(polish.contains("- Vercel"), "modes: polish injects vocabulary")
+    let prompt = CleanupModes.system(modeID: "prompt", vocabulary: vocab)
+    check(prompt.contains("prompt-engineering"), "modes: prompt reshapes into an AI prompt")
+    check(prompt.contains("- Vercel"), "modes: prompt injects vocabulary")
+    let unknown = CleanupModes.system(modeID: "nope", vocabulary: vocab)
+    check(unknown.contains("editor, not an assistant"), "modes: unknown id falls back to clean")
+}
+
 if failures == 0 {
     print("\nALL PASS — \(passes) checks")
     exit(0)
