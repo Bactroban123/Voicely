@@ -1,10 +1,11 @@
-name: Build My Beautiful Wife (Windows)
+name: Release (Windows)
 
-# Builds the Windows setup .exe on a GitHub-hosted Windows runner.
-# Trigger by pushing a tag like `mbw-v1`, or run manually from the Actions tab.
+# Builds the Windows installer (.exe) on a GitHub-hosted Windows runner.
+# Trigger by pushing a tag like `v0.2.0` (same tag as the macOS release),
+# or run manually from the Actions tab.
 on:
   push:
-    tags: ['mbw-v*']
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -16,12 +17,13 @@ jobs:
     defaults:
       run:
         working-directory: windows
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.12"
 
       - name: Install dependencies
         run: |
@@ -40,7 +42,7 @@ jobs:
       - name: Build executable (PyInstaller)
         run: >
           pyinstaller --noconfirm --onefile --windowed
-          --name MyBeautifulWife
+          --name Voicely
           --icon app/icon.ico
           --collect-all sounddevice
           --collect-all pystray
@@ -52,19 +54,19 @@ jobs:
       - name: Smoke test the built exe (boots without crashing on Windows)
         shell: pwsh
         run: |
-          $dir = "$env:APPDATA\MyBeautifulWife"
+          $dir = "$env:APPDATA\Voicely"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
           '{"openrouter_key":"sk-or-smoketest"}' | Set-Content -Encoding utf8 "$dir\config.json"
           Remove-Item "$dir\log.txt" -ErrorAction SilentlyContinue
-          $env:MBW_SMOKE = "1"
-          $p = Start-Process -FilePath "dist\MyBeautifulWife.exe" -PassThru -Wait
+          $env:VOICELY_SMOKE = "1"
+          $p = Start-Process -FilePath "dist\Voicely.exe" -PassThru -Wait
           Write-Host "exit code: $($p.ExitCode)"
           $log = ""
           if (Test-Path "$dir\log.txt") { $log = Get-Content "$dir\log.txt" -Raw }
           Write-Host "---- app log ----"
           Write-Host $log
-          if ($p.ExitCode -ne 0) { Write-Error "frozen exe exited non-zero"; exit 1 }
-          if ($log -notmatch "SMOKE OK") { Write-Error "frozen exe did not reach SMOKE OK (startup crash)"; exit 1 }
+          if ($p.ExitCode -ne 0) { Write-Error "Voicely.exe exited non-zero"; exit 1 }
+          if ($log -notmatch "SMOKE OK") { Write-Error "Voicely.exe did not reach SMOKE OK (startup crash)"; exit 1 }
           Write-Host "SMOKE PASSED: the frozen app boots and wires up on Windows."
 
       - name: Build installer (Inno Setup)
@@ -75,16 +77,17 @@ jobs:
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MyBeautifulWifeSetup
-          path: windows/installer_out/MyBeautifulWifeSetup.exe
+          name: VoicelySetup
+          path: windows/installer_out/VoicelySetup.exe
 
       - name: Publish release (on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: windows/installer_out/MyBeautifulWifeSetup.exe
-          name: My Beautiful Wife
+          files: windows/installer_out/VoicelySetup.exe
           body: |
-            Windows setup for **My Beautiful Wife** — voice to text anywhere, powered by your OpenRouter key.
+            **Voicely for Windows** — press **Ctrl+Alt+Space**, speak, press again. Text types itself.
 
-            **Install:** download `MyBeautifulWifeSetup.exe`, run it (if Windows SmartScreen warns, click **More info → Run anyway** — it's unsigned), then launch it. Paste the OpenRouter key when asked. Press **Ctrl+Alt+Space**, speak, press again, and it types where your cursor is.
+            **Install:** download `VoicelySetup.exe` and run it. If Windows SmartScreen warns,
+            click **More info → Run anyway** (it's unsigned — expected for now). Paste your
+            OpenRouter API key on first launch. That's it.

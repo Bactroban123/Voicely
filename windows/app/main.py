@@ -1,5 +1,5 @@
 """
-My Beautiful Wife — a private voice-to-text tray app for Windows.
+Voicely — voice-to-text tray app for Windows.
 
 Press the hotkey (default Ctrl+Alt+Space) to start listening, speak, press it
 again to stop. The audio is transcribed (and optionally cleaned up) through the
@@ -28,7 +28,7 @@ from PIL import Image, ImageDraw
 import core
 
 APP_NAME = core.APP_TITLE
-APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "MyBeautifulWife")
+APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Voicely")
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 LOG_PATH = os.path.join(APP_DIR, "log.txt")
 
@@ -254,7 +254,7 @@ class App:
         # CI smoke mode: everything is constructed and wired; exit instead of
         # entering the blocking tray loop, so the frozen exe can be verified to
         # boot cleanly on a headless Windows runner.
-        if os.environ.get("MBW_SMOKE"):
+        if os.environ.get("VOICELY_SMOKE"):
             log.info("SMOKE OK")
             return
         self.icon.run()

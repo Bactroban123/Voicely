@@ -1,5 +1,5 @@
 """
-Pure, cross-platform logic for My Beautiful Wife — no audio, keyboard, tray or GUI
+Pure, cross-platform logic for Voicely (Windows) — no audio, keyboard, tray or GUI
 imports, so it runs (and is unit-tested) on any OS, including the macOS dev box and
 the Windows CI runner. main.py owns the platform I/O and calls into here.
 """
@@ -16,7 +16,7 @@ import numpy as np
 import requests
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
-APP_TITLE = "My Beautiful Wife"
+APP_TITLE = "Voicely"
 SAMPLE_RATE = 16000
 MIN_SECONDS = 0.3  # ignore accidental sub-0.3s taps
 
