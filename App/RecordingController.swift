@@ -1,8 +1,9 @@
 import AppKit
 import VoicelyCore
 
-/// Orchestrates the dictation loop: hotkey → record → transcribe on-device →
-/// insert at the cursor. (AI cleanup arrives in Phase 4 via VoicelyCore.Pipeline.)
+/// Orchestrates the dictation loop, driving side effects from the tested
+/// VoicelyCore.Pipeline reducer: hotkey → record → transcribe → (cleanup) → insert.
+/// Cleanup failures fall back to the raw transcript (never lose it).
 final class RecordingController {
     enum UIState { case idle, recording, processing }
 
@@ -10,63 +11,121 @@ final class RecordingController {
         didSet { onStateChange?(state) }
     }
     var onStateChange: ((UIState) -> Void)?
+    var onLevel: ((Float) -> Void)?
     var onTranscript: ((String) -> Void)?
 
-    // Default hotkey: Right Option (keyCode 61). User-configurable in a later phase.
-    private var processor = HotKeyProcessor(config: HotKeyConfig(hotKeyCode: 61))
+    private let settings = SettingsStore.shared
+    private var hotKey = HotKeyProcessor(config: HotKeyConfig(hotKeyCode: 61))
+    private var pipeline = Pipeline(cleanupEnabled: false)
+    private var pendingSamples: [Float] = []
+
     private let recorder = AudioRecorder()
     private let engine: TranscriptionEngine = ParakeetEngine(version: .v2)
     private let inserter = TextInserter()
+    private let cleanup = CleanupService()
     private lazy var monitor = KeyEventMonitor { [weak self] event in
-        // CGEventTap callbacks fire on the main run loop.
-        self?.handle(event)
+        self?.handle(event) // CGEventTap callbacks fire on the main run loop
     }
 
     /// Returns false if the event tap couldn't start (Input Monitoring not granted).
     func start() -> Bool {
-        // Warm-load the model in the background so the first dictation is fast.
-        Task { [engine] in try? await engine.prepare() }
+        hotKey = HotKeyProcessor(config: HotKeyConfig(hotKeyCode: UInt16(settings.hotKeyCode)))
+        recorder.onLevel = { [weak self] level in self?.onLevel?(level) }
+        Task { [engine] in try? await engine.prepare() } // warm-load
         return monitor.start()
     }
 
+    // MARK: - Hotkey
+
     private func handle(_ event: KeyEvent) {
-        guard let output = processor.process(event) else { return }
+        guard let output = hotKey.process(event) else { return }
         switch output {
         case .startRecording:
+            pipeline.cleanupEnabled = settings.cleanupEnabled
             do {
                 try recorder.start()
-                state = .recording
+                apply(pipeline.handle(.startedRecording))
             } catch {
                 NSLog("Voicely: failed to start recording — \(error)")
             }
         case .stopRecording:
-            let samples = recorder.stop()
-            transcribeAndInsert(samples)
+            pendingSamples = recorder.stop()
+            apply(pipeline.handle(.stoppedRecording))
         case .cancel:
             recorder.stop()
-            state = .idle
-            NSLog("Voicely: cancelled")
+            apply(pipeline.handle(.cancelled))
         }
     }
 
-    private func transcribeAndInsert(_ samples: [Float]) {
-        state = .processing
+    // MARK: - Pipeline effects
+
+    private func apply(_ effect: Pipeline.Effect) {
+        syncState()
+        switch effect {
+        case .none:
+            break
+        case .beginTranscription:
+            runTranscription()
+        case .beginCleanup(let raw):
+            runCleanup(raw)
+        case .insert(let text):
+            performInsert(text)
+        }
+    }
+
+    private func syncState() {
+        switch pipeline.state {
+        case .idle: state = .idle
+        case .recording: state = .recording
+        case .transcribing, .refining, .inserting: state = .processing
+        }
+    }
+
+    private func runTranscription() {
+        let samples = pendingSamples
         Task { [weak self] in
             guard let self else { return }
             do {
                 let text = try await self.engine.transcribe(samples)
                 await MainActor.run {
-                    if !text.isEmpty {
-                        self.inserter.insert(text)
-                        self.onTranscript?(text)
-                        NSLog("Voicely transcript: %@", text)
+                    if text.isEmpty {
+                        self.apply(self.pipeline.handle(.transcriptionFailed))
+                    } else {
+                        self.apply(self.pipeline.handle(.transcript(text)))
                     }
-                    self.state = .idle
                 }
             } catch {
                 NSLog("Voicely: transcribe error — \(error)")
-                await MainActor.run { self.state = .idle }
+                await MainActor.run { self.apply(self.pipeline.handle(.transcriptionFailed)) }
             }
         }
+    }
+
+    private func runCleanup(_ raw: String) {
+        let modelID = settings.cleanupModelID
+        let vocabulary = VocabularyStore.shared.entries
+        let zeroRetention = settings.zeroRetention
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let cleaned = try await self.cleanup.clean(raw,
+                                                           modelID: modelID,
+                                                           vocabulary: vocabulary,
+                                                           zeroRetention: zeroRetention)
+                await MainActor.run { self.apply(self.pipeline.handle(.cleaned(cleaned))) }
+            } catch {
+                NSLog("Voicely: cleanup failed, inserting raw — \(error)")
+                await MainActor.run { self.apply(self.pipeline.handle(.cleanupFailed)) }
+            }
+        }
+    }
+
+    private func performInsert(_ text: String) {
+        if !text.isEmpty {
+            inserter.insert(text)
+            onTranscript?(text)
+            NSLog("Voicely inserted: %@", text)
+        }
+        apply(pipeline.handle(.inserted))
     }
 }
