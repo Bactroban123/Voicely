@@ -1,0 +1,62 @@
+name: Build My Beautiful Wife (Windows)
+
+# Builds the Windows setup .exe on a GitHub-hosted Windows runner.
+# Trigger by pushing a tag like `mbw-v1`, or run manually from the Actions tab.
+on:
+  push:
+    tags: ['mbw-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r app/requirements.txt pyinstaller
+
+      - name: Generate icon
+        run: python app/gen_icon.py
+
+      - name: Build executable (PyInstaller)
+        run: >
+          pyinstaller --noconfirm --onefile --windowed
+          --name MyBeautifulWife
+          --icon app/icon.ico
+          --collect-all sounddevice
+          app/main.py
+
+      - name: Build installer (Inno Setup)
+        run: |
+          choco install innosetup -y --no-progress
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyBeautifulWifeSetup
+          path: windows/installer_out/MyBeautifulWifeSetup.exe
+
+      - name: Publish release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: windows/installer_out/MyBeautifulWifeSetup.exe
+          name: My Beautiful Wife
+          body: |
+            Windows setup for **My Beautiful Wife** — voice to text anywhere, powered by your OpenRouter key.
+
+            **Install:** download `MyBeautifulWifeSetup.exe`, run it (if Windows SmartScreen warns, click **More info → Run anyway** — it's unsigned), then launch it. Paste the OpenRouter key when asked. Press **Ctrl+Alt+Space**, speak, press again, and it types where your cursor is.

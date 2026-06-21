@@ -1,0 +1,7 @@
+numpy
+requests
+sounddevice
+pyperclip
+keyboard
+pystray
+pillow
