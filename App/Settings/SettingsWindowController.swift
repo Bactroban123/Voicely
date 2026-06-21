@@ -10,7 +10,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     func show() {
         if window == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 460, height: 680),
+                contentRect: NSRect(x: 0, y: 0, width: 760, height: 520),
                 styleMask: [.titled, .closable],
                 backing: .buffered,
                 defer: false)

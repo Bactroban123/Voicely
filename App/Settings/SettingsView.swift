@@ -1,137 +1,199 @@
 import SwiftUI
 import VoicelyCore
 
-// MARK: - Branded Header
-private struct SettingsHeader: View {
-    private let navy   = Color(red: 0.059, green: 0.090, blue: 0.141)
-    private let mid    = Color(red: 0.090, green: 0.133, blue: 0.200)
-    private let glacier = Color(red: 0.227, green: 0.659, blue: 0.788)
-    private let cyan   = Color(red: 0.133, green: 0.827, blue: 0.933)
+// MARK: - Tab model
+private enum Tab: CaseIterable {
+    case general, cleanup, vocabulary, monsters
 
-    // Pixel sparkles — fixed positions inside the 460×130 header
-    private struct Spark: Identifiable {
-        let id: Int; let x: CGFloat; let y: CGFloat; let r: CGFloat; let color: Color
-    }
-    private let sparks: [Spark] = [
-        Spark(id:0, x:290, y:18,  r:2,   color:.white.opacity(0.55)),
-        Spark(id:1, x:340, y:52,  r:3,   color: Color(red:0.133,green:0.827,blue:0.933).opacity(0.7)),
-        Spark(id:2, x:390, y:22,  r:1.5, color:.white.opacity(0.35)),
-        Spark(id:3, x:415, y:75,  r:2.5, color: Color(red:0.227,green:0.659,blue:0.788).opacity(0.6)),
-        Spark(id:4, x:360, y:100, r:2,   color:.white.opacity(0.4)),
-        Spark(id:5, x:430, y:42,  r:1.5, color: Color(red:1.0,green:0.843,blue:0.0).opacity(0.5)),
-        Spark(id:6, x:450, y:108, r:1.5, color: Color(red:0.133,green:0.827,blue:0.933).opacity(0.4)),
-        Spark(id:7, x:310, y:88,  r:1,   color:.white.opacity(0.3)),
-    ]
-
-    var body: some View {
-        ZStack(alignment: .leading) {
-            // Background gradient
-            LinearGradient(
-                colors: [navy, mid],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-
-            // Subtle grid lines (pixel aesthetic)
-            Canvas { ctx, size in
-                let step: CGFloat = 20
-                var x: CGFloat = 0
-                while x < size.width {
-                    ctx.stroke(
-                        Path { p in p.move(to: .init(x:x,y:0)); p.addLine(to: .init(x:x,y:size.height)) },
-                        with: .color(.white.opacity(0.03)), lineWidth: 1
-                    )
-                    x += step
-                }
-                var y: CGFloat = 0
-                while y < size.height {
-                    ctx.stroke(
-                        Path { p in p.move(to: .init(x:0,y:y)); p.addLine(to: .init(x:size.width,y:y)) },
-                        with: .color(.white.opacity(0.03)), lineWidth: 1
-                    )
-                    y += step
-                }
-            }
-
-            // Pixel sparkle dots
-            ForEach(sparks) { s in
-                Circle().fill(s.color)
-                    .frame(width: s.r*2, height: s.r*2)
-                    .position(x: s.x, y: s.y)
-            }
-
-            // Mascot + title
-            HStack(spacing: 18) {
-                MascotView(pixelSize: 5)
-                    .frame(width: 60, height: 90)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Voicely")
-                        .font(.system(size: 30, weight: .black))
-                        .foregroundStyle(.white)
-
-                    Text("speak · clean · translate")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(cyan)
-
-                    Spacer(minLength: 6)
-
-                    Text("✦ frostpane edition ✦")
-                        .font(.system(size: 9, weight: .light, design: .monospaced))
-                        .foregroundStyle(glacier.opacity(0.65))
-                }
-
-                Spacer()
-            }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 14)
+    var label: String {
+        switch self {
+        case .general:   return "General"
+        case .cleanup:   return "AI Cleanup"
+        case .vocabulary: return "Vocabulary"
+        case .monsters:  return "Monsters"
         }
-        .frame(height: 130)
-        .clipped()
+    }
+    var icon: String {
+        switch self {
+        case .general:    return "gearshape"
+        case .cleanup:    return "sparkles"
+        case .vocabulary: return "text.book.closed"
+        case .monsters:   return "gamecontroller"
+        }
     }
 }
 
-// MARK: - Settings View
+// MARK: - Colour tokens (Frostpane)
+private extension Color {
+    static let fpBg       = Color(red: 0.980, green: 0.988, blue: 0.996)  // #FBFDFE
+    static let fpSurface  = Color(red: 0.953, green: 0.969, blue: 0.980)  // #F3F7FA
+    static let fpSurface2 = Color(red: 0.910, green: 0.937, blue: 0.957)  // #E8EFF4
+    static let fpText     = Color(red: 0.055, green: 0.102, blue: 0.141)  // #0E1A24
+    static let fpMuted    = Color(red: 0.352, green: 0.420, blue: 0.471)  // #5A6B78
+    static let fpAccent   = Color(red: 0.227, green: 0.659, blue: 0.788)  // #3AA8C9
+    static let fpHairline = Color(red: 0.055, green: 0.102, blue: 0.141).opacity(0.10)
+}
+
+// MARK: - Settings View (Flow-style two-column)
 struct SettingsView: View {
     @StateObject private var model = SettingsViewModel()
+    @State private var selectedTab: Tab = .general
     var onClose: (() -> Void)?
 
-    private let glacier = Color(red: 0.227, green: 0.659, blue: 0.788)
-
-    private let hotkeyOptions: [(name: String, code: Int)] = [
-        ("Right Option ⌥", 61),
-        ("Left Option ⌥",  58),
-        ("Right Command ⌘", 54),
-        ("fn / Globe 🌐",   63),
-        ("F5",              96),
-    ]
-
     var body: some View {
-        VStack(spacing: 0) {
-            // ── Branded header ──────────────────────────────────────────────
-            SettingsHeader()
+        HStack(spacing: 0) {
+            // ── Sidebar ──────────────────────────────────────────────────
+            sidebar
+                .frame(width: 200)
 
-            // ── Form ────────────────────────────────────────────────────────
-            Form {
+            // ── Divider ──────────────────────────────────────────────────
+            Rectangle()
+                .fill(Color.fpHairline)
+                .frame(width: 0.5)
+
+            // ── Content ──────────────────────────────────────────────────
+            contentArea
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(width: 760, height: 520)
+        .background(Color.fpBg)
+        .tint(Color.fpAccent)
+    }
+
+    // MARK: Sidebar
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            // App header
+            HStack(spacing: 10) {
+                MascotView(pixelSize: 4)
+                    .frame(width: 48, height: 72)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Voicely")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.fpText)
+                    Text("frostpane")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Color.fpAccent)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 20)
+            .padding(.bottom, 16)
+
+            Rectangle()
+                .fill(Color.fpHairline)
+                .frame(height: 0.5)
+                .padding(.horizontal, 14)
+
+            // Nav items
+            VStack(spacing: 2) {
+                ForEach(Tab.allCases, id: \.self) { tab in
+                    NavRow(tab: tab, isSelected: selectedTab == tab) {
+                        selectedTab = tab
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 8)
+
+            Spacer()
+
+            // Stats footer
+            statsFooter
+
+            // Done button
+            Button("Done") {
+                model.save()
+                onClose?()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .keyboardShortcut(.defaultAction)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 14)
+            .padding(.bottom, 16)
+        }
+        .background(Color.fpSurface2)
+    }
+
+    // MARK: Stats footer
+    private var statsFooter: some View {
+        VStack(spacing: 8) {
+            Rectangle()
+                .fill(Color.fpHairline)
+                .frame(height: 0.5)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 4)
+
+            statRow(label: "Total dictations",
+                    value: "\(HistoryStore.shared.entries.count)")
+            statRow(label: "Recent",
+                    value: HistoryStore.shared.entries.first
+                        .map { History.preview($0.text, max: 20) } ?? "—")
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 12)
+    }
+
+    private func statRow(label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundStyle(Color.fpMuted)
+            Spacer()
+            Text(value)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(Color.fpText)
+                .lineLimit(1)
+        }
+    }
+
+    // MARK: Content area
+    @ViewBuilder
+    private var contentArea: some View {
+        ScrollView {
+            switch selectedTab {
+            case .general:    generalPage
+            case .cleanup:    cleanupPage
+            case .vocabulary: vocabularyPage
+            case .monsters:   monstersPage
+            }
+        }
+        .scrollContentBackground(.hidden)
+    }
+
+    // MARK: - Pages
+
+    private var generalPage: some View {
+        PageShell(title: "General", icon: "gearshape") {
+            FormCard {
                 Section {
-                    Picker("Hotkey", selection: $model.hotKeyCode) {
-                        ForEach(hotkeyOptions, id: \.code) { Text($0.name).tag($0.code) }
+                    Picker("Dictation hotkey", selection: $model.hotKeyCode) {
+                        Text("Right Option ⌥").tag(61)
+                        Text("Left Option ⌥").tag(58)
+                        Text("Right Command ⌘").tag(54)
+                        Text("fn / Globe").tag(63)
+                        Text("F5").tag(96)
                     }
                     Toggle("Launch at login", isOn: $model.launchAtLogin)
+                } footer: {
                     Text("Tap to toggle · hold for push-to-talk · esc to cancel")
-                        .font(.caption).foregroundStyle(.secondary)
-                } header: {
-                    Label("General", systemImage: "gearshape.fill")
                 }
-
-                Section {
+            }
+            FormCard {
+                Section("On-device transcription") {
                     Picker("Model", selection: $model.transcriptionModelID) {
                         ForEach(ModelCatalog.transcription) { Text($0.name).tag($0.id) }
                     }
-                } header: {
-                    Label("On-device transcription", systemImage: "waveform.circle.fill")
                 }
+            }
+        }
+    }
 
+    private var cleanupPage: some View {
+        PageShell(title: "AI Cleanup", icon: "sparkles") {
+            FormCard {
                 Section {
                     Toggle("Clean up transcripts", isOn: $model.cleanupEnabled)
                     Picker("Mode", selection: $model.cleanupModeID) {
@@ -141,7 +203,13 @@ struct SettingsView: View {
                     if let mode = CleanupModes.mode(id: model.cleanupModeID) {
                         Text(mode.detail).font(.caption).foregroundStyle(.secondary)
                     }
-                    Picker("Model", selection: $model.cleanupModelID) {
+                } header: {
+                    Text("Mode")
+                }
+            }
+            FormCard {
+                Section {
+                    Picker("Cleanup model", selection: $model.cleanupModelID) {
                         ForEach(ModelCatalog.cleanup) { Text($0.name).tag($0.id) }
                     }
                     .disabled(!model.cleanupEnabled)
@@ -149,44 +217,159 @@ struct SettingsView: View {
                     Toggle("Zero data retention", isOn: $model.zeroRetention)
                         .disabled(!model.cleanupEnabled)
                 } header: {
-                    Label("AI cleanup & translation", systemImage: "sparkles")
-                }
-
-                Section {
-                    Text("One per line. Optional misheard variants after a colon, e.g. Collabo: colab, kollabo")
-                        .font(.caption).foregroundStyle(.secondary)
-                    TextEditor(text: $model.vocabularyText)
-                        .font(.body).frame(minHeight: 70)
-                } header: {
-                    Label("Vocabulary", systemImage: "text.book.closed.fill")
-                }
-
-                Section {
-                    Text("Say the trigger, get the text. One per line: trigger => expansion.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    TextEditor(text: $model.snippetsText)
-                        .font(.body).frame(minHeight: 60)
-                } header: {
-                    Label("Snippets", systemImage: "bolt.fill")
+                    Text("Provider")
                 }
             }
-            .formStyle(.grouped)
-
-            Divider()
-
-            // ── Done button ─────────────────────────────────────────────────
-            HStack {
-                Spacer()
-                Button("Done") {
-                    model.save()
-                    onClose?()
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-            }
-            .padding(12)
         }
-        .frame(width: 460, height: 710)
-        .tint(glacier)
+    }
+
+    private var vocabularyPage: some View {
+        PageShell(title: "Vocabulary & Snippets", icon: "text.book.closed") {
+            FormCard {
+                Section {
+                    TextEditor(text: $model.vocabularyText)
+                        .font(.system(size: 13, design: .monospaced))
+                        .frame(minHeight: 100)
+                } header: {
+                    Text("Vocabulary")
+                } footer: {
+                    Text("One word per line. Add misheard variants after a colon: Collabo: colab, kollabo")
+                }
+            }
+            FormCard {
+                Section {
+                    TextEditor(text: $model.snippetsText)
+                        .font(.system(size: 13, design: .monospaced))
+                        .frame(minHeight: 90)
+                } header: {
+                    Text("Snippets")
+                } footer: {
+                    Text("Say the trigger, get the expansion. Format: trigger => expansion")
+                }
+            }
+        }
+    }
+
+    private var monstersPage: some View {
+        PageShell(title: "Monsters", icon: "gamecontroller") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Your pixel army")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.fpText)
+
+                Text("Tap the arena to summon a new warrior. They fight each other in their own little world.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.fpMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                MonsterArenaView()
+
+                // Class legend
+                classLegend
+            }
+            .padding(20)
+        }
+    }
+
+    private var classLegend: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("The roster")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color.fpMuted)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 120))], spacing: 4) {
+                ForEach(MonsterClass.allCases, id: \.self) { class_ in
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(Color.fpAccent.opacity(0.2))
+                            .frame(width: 6, height: 6)
+                        Text(class_.rawValue)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(Color.fpMuted)
+                        Spacer()
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.fpSurface)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.fpHairline, lineWidth: 0.5)
+        )
+    }
+}
+
+// MARK: - Sidebar NavRow
+private struct NavRow: View {
+    let tab: Tab
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: tab.icon)
+                    .frame(width: 16)
+                    .foregroundStyle(isSelected ? Color.fpAccent : Color.fpMuted)
+                Text(tab.label)
+                    .font(.system(size: 13, weight: isSelected ? .medium : .regular))
+                    .foregroundStyle(isSelected ? Color.fpText : Color.fpMuted)
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                isSelected
+                    ? Color.fpAccent.opacity(0.10)
+                    : Color.clear
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Page shell
+private struct PageShell<Content: View>: View {
+    let title: String
+    let icon: String
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Page header
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Color.fpAccent)
+                Text(title)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Color.fpText)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 22)
+            .padding(.bottom, 16)
+
+            Rectangle()
+                .fill(Color.fpHairline)
+                .frame(height: 0.5)
+                .padding(.horizontal, 20)
+
+            content()
+        }
+    }
+}
+
+// MARK: - Form card wrapper (opaque, hairline, radius 12)
+private struct FormCard<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        Form { content() }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .scrollDisabled(true)
+            .frame(height: nil)
     }
 }
