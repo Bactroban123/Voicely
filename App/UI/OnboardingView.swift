@@ -26,11 +26,15 @@ struct OnboardingView: View {
                 permissionRow("Microphone", "so it can hear you") {
                     PermissionManager.requestMicrophone { _ in }
                 }
+                permissionRow("Input Monitoring", "so it can detect your hotkey") {
+                    PermissionManager.requestInputMonitoring()
+                    PermissionManager.openSystemSettings(.inputMonitoring)
+                }
                 permissionRow("Accessibility", "so it can type at your cursor") {
                     _ = PermissionManager.accessibilityTrusted(prompt: true)
                     PermissionManager.openSystemSettings(.accessibility)
                 }
-                Text("If a switch needs flipping in System Settings, turn it on, then quit and reopen Voicely.")
+                Text("After flipping a switch in System Settings, quit and reopen Voicely.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
