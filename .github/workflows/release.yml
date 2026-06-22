@@ -16,6 +16,9 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+permissions:
+  contents: write   # needed to create the Release + upload the DMG
+
 jobs:
   release:
     runs-on: macos-15
