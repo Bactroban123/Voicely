@@ -124,6 +124,31 @@ def test_cleanup_body_shape():
     assert body["temperature"] == 0.1
 
 
+# ---------------------------------------------------------------- cleanup modes
+
+def test_default_mode_is_clean():
+    assert core.DEFAULT_CONFIG["cleanup_mode"] == "clean"
+    assert core.system_for_mode("clean") == core.CLEANUP_SYSTEM
+
+
+def test_unknown_mode_falls_back_to_clean():
+    assert core.system_for_mode("nope") == core.CLEANUP_SYSTEM
+
+
+def test_translate_modes_target_and_source():
+    assert "fluent English" in core.system_for_mode("translate-en")
+    assert "Thai" in core.system_for_mode("translate-th")
+    th_en = core.system_for_mode("translate-th-en")
+    assert "spoken Thai" in th_en
+    assert "fluent English" in th_en
+    assert "ครับ" in th_en  # Thai politeness-particle guidance
+
+
+def test_cleanup_body_uses_selected_mode():
+    body = core.cleanup_body("สวัสดี", sample_cfg(cleanup_mode="translate-th-en"))
+    assert "spoken Thai" in body["messages"][0]["content"]
+
+
 # ---------------------------------------------------------------- parsing
 
 def test_parse_transcription_trims():

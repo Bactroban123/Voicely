@@ -19,6 +19,14 @@ final class SettingsStore {
         static let cleanupModelID = "cleanupModelID"
         static let cleanupModeID = "cleanupModeID"
         static let zeroRetention = "zeroRetention"
+        static let autoLearnEnabled = "autoLearnEnabled"
+    }
+
+    /// When on, Voicely learns recurring proper nouns from your dictation and
+    /// feeds them into cleanup, and suggests snippets for phrases you repeat.
+    var autoLearnEnabled: Bool {
+        get { defaults.object(forKey: Key.autoLearnEnabled) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Key.autoLearnEnabled) }
     }
 
     var cleanupModeID: String {

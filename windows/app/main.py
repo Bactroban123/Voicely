@@ -135,14 +135,48 @@ class App:
         self.busy = False
         self.icon = pystray.Icon(APP_NAME, make_icon(False), APP_NAME, self._menu())
 
+    MODE_LABELS = [
+        ("clean", "Clean up"),
+        ("translate-en", "Translate → English"),
+        ("translate-th", "Translate → Thai"),
+        ("translate-th-en", "Thai → English"),
+    ]
+
     def _menu(self):
         return pystray.Menu(
             pystray.MenuItem(lambda i: self._status_text(), None, enabled=False),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Mode", self._mode_menu()),
             pystray.MenuItem("Set OpenRouter key…", self.on_set_key),
             pystray.MenuItem("Open log folder", self.on_open_folder),
             pystray.MenuItem("Quit", self.on_quit),
         )
+
+    def _mode_menu(self):
+        return pystray.Menu(*[
+            pystray.MenuItem(
+                label,
+                self._make_set_mode(mode_id),
+                checked=self._make_is_mode(mode_id),
+                radio=True,
+            )
+            for mode_id, label in self.MODE_LABELS
+        ])
+
+    def _make_set_mode(self, mode_id):
+        def handler(icon=None, item=None):
+            self.cfg["cleanup_mode"] = mode_id
+            if mode_id != "clean":
+                self.cfg["cleanup"] = True  # translation runs through the cleanup step
+            core.save_config(self.cfg, CONFIG_PATH)
+            try:
+                self.icon.update_menu()
+            except Exception:
+                pass
+        return handler
+
+    def _make_is_mode(self, mode_id):
+        return lambda item: self.cfg.get("cleanup_mode", "clean") == mode_id
 
     def _status_text(self) -> str:
         hk = self.cfg.get("hotkey", "ctrl+alt+space")
@@ -194,7 +228,9 @@ class App:
             pass
         try:
             text = core.transcribe(wav, self.cfg)
-            if self.cfg.get("cleanup"):
+            # Run the cleanup/translate step when cleanup is on, or whenever a
+            # translate mode is active (translation lives inside that step).
+            if self.cfg.get("cleanup") or self.cfg.get("cleanup_mode", "clean") != "clean":
                 text = core.cleanup(text, self.cfg)
             if text:
                 type_text(text)

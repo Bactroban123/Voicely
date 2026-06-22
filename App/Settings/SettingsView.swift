@@ -364,6 +364,8 @@ struct SettingsView: View {
     private var vocabularyPage: some View {
         PageShell(title: "Vocabulary & Snippets", icon: "text.book.closed") {
             VStack(spacing: 0) {
+                autoLearnToggle
+
                 // Sub-tab picker
                 HStack(spacing: 0) {
                     vocabTabButton("Vocabulary",
@@ -417,6 +419,10 @@ struct SettingsView: View {
                         vocabChips
                     }
 
+                    if model.autoLearnEnabled && !model.learnedTerms.isEmpty {
+                        learnedVocabSection
+                    }
+
                 } else {
                     FPCard {
                         VStack(alignment: .leading, spacing: 0) {
@@ -453,10 +459,119 @@ struct SettingsView: View {
                     if snippetCount > 0 {
                         snippetPreview
                     }
+
+                    if model.autoLearnEnabled && !model.snippetSuggestions.isEmpty {
+                        snippetSuggestionsSection
+                    }
                 }
             }
             .padding(16)
         }
+    }
+
+    // MARK: Auto-learn toggle + learned sections
+
+    private var autoLearnToggle: some View {
+        FPCard {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(model.autoLearnEnabled ? Color.fpAccent.opacity(0.15) : Color.fpSurface2)
+                        .frame(width: 40, height: 40)
+                    Image(systemName: "brain.head.profile")
+                        .font(.system(size: 16))
+                        .foregroundStyle(model.autoLearnEnabled ? Color.fpAccent : Color.fpMuted)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Learn as I talk")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Color.fpText)
+                    Text(model.autoLearnEnabled
+                         ? "Voicely learns names you repeat and suggests snippets"
+                         : "Voicely won't pick up new words on its own")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.fpMuted)
+                }
+                Spacer()
+                Toggle("", isOn: $model.autoLearnEnabled)
+                    .labelsHidden()
+                    .onChange(of: model.autoLearnEnabled) { _, _ in model.refreshLearning() }
+            }
+            .padding(16)
+        }
+        .padding(.horizontal, 0)
+    }
+
+    private var learnedVocabSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 5) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.fpAccent)
+                Text("Learned automatically")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.fpMuted)
+                Spacer()
+                Text("\(model.learnedTerms.count)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(Color.fpMuted)
+            }
+            .padding(.horizontal, 4)
+
+            FlowLayout(spacing: 6) {
+                ForEach(model.learnedTerms, id: \.self) { term in
+                    HStack(spacing: 4) {
+                        Text(term)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Color.fpText)
+                        Button {
+                            model.removeLearnedTerm(term)
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(Color.fpMuted)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.leading, 8).padding(.trailing, 6).padding(.vertical, 4)
+                    .background(Color.fpSurface2)
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .overlay(RoundedRectangle(cornerRadius: 5)
+                        .strokeBorder(Color.fpHairline, lineWidth: 0.5))
+                }
+            }
+
+            Text("These feed your cleanup so Voicely spells them the same way every time.")
+                .font(.system(size: 10))
+                .foregroundStyle(Color.fpMuted)
+                .padding(.horizontal, 4)
+        }
+        .padding(.top, 10)
+    }
+
+    private var snippetSuggestionsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 5) {
+                Image(systemName: "lightbulb")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.fpAccent)
+                Text("You say these a lot")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.fpMuted)
+                Spacer()
+            }
+            .padding(.horizontal, 4)
+
+            VStack(spacing: 6) {
+                ForEach(model.snippetSuggestions, id: \.phrase) { suggestion in
+                    SnippetSuggestionRow(
+                        suggestion: suggestion,
+                        onAccept: { trigger in model.acceptSnippet(suggestion, trigger: trigger) },
+                        onDismiss: { model.dismissSnippet(suggestion) })
+                }
+            }
+        }
+        .padding(.top, 10)
     }
 
     private var vocabCount: Int {
@@ -706,12 +821,14 @@ private struct ModePill: View {
 
     private var modeIcon: String {
         switch mode.id {
-        case "clean":        return "text.badge.checkmark"
-        case "polish":       return "wand.and.stars"
-        case "prompt":       return "chevron.left.forwardslash.chevron.right"
-        case "translate-en": return "globe"
-        case "translate-he": return "globe.asia.australia"
-        default:             return "sparkles"
+        case "clean":           return "text.badge.checkmark"
+        case "polish":          return "wand.and.stars"
+        case "prompt":          return "chevron.left.forwardslash.chevron.right"
+        case "translate-en":    return "globe"
+        case "translate-he":    return "globe.europe.africa"
+        case "translate-th":    return "globe.asia.australia"
+        case "translate-th-en": return "arrow.left.arrow.right"
+        default:                return "sparkles"
         }
     }
 
@@ -742,6 +859,73 @@ private struct ModePill: View {
             .clipShape(RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// One auto-learned snippet suggestion: the repeated phrase + an editable trigger.
+private struct SnippetSuggestionRow: View {
+    let suggestion: SnippetSuggestion
+    let onAccept: (String) -> Void
+    let onDismiss: () -> Void
+    @State private var trigger: String
+
+    init(suggestion: SnippetSuggestion,
+         onAccept: @escaping (String) -> Void,
+         onDismiss: @escaping () -> Void) {
+        self.suggestion = suggestion
+        self.onAccept = onAccept
+        self.onDismiss = onDismiss
+        _trigger = State(initialValue: suggestion.suggestedTrigger)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("\u{201C}\(suggestion.phrase)\u{201D}")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.fpText)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                HStack(spacing: 4) {
+                    Text("say")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.fpMuted)
+                    TextField("trigger", text: $trigger)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color.fpAccent)
+                        .frame(maxWidth: 130)
+                }
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(Color.fpSurface2)
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+
+                Text("×\(suggestion.count)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(Color.fpMuted)
+
+                Spacer()
+
+                Button { onAccept(trigger) } label: {
+                    Text("Add").font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(trigger.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Color.fpMuted)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(12)
+        .background(Color.fpSurface)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.fpHairline, lineWidth: 0.5))
     }
 }
 

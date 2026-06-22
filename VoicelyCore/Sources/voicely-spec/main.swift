@@ -241,7 +241,7 @@ do { // expansion with regex-special chars is literal
 print("CleanupModes")
 
 do {
-    check(CleanupModes.all.count == 5, "modes: five presets (clean/polish/prompt/translate x2)")
+    check(CleanupModes.all.count == 7, "modes: seven presets (clean/polish/prompt/translate x4)")
     check(CleanupModes.mode(id: CleanupModes.defaultID) != nil, "modes: default id exists")
     let vocab = [VocabularyEntry(term: "Vercel")]
     let clean = CleanupModes.system(modeID: "clean", vocabulary: vocab)
@@ -257,6 +257,14 @@ do {
     check(tEN.contains("- Vercel"), "modes: translate-en injects vocabulary")
     let tHE = CleanupModes.system(modeID: "translate-he", vocabulary: vocab)
     check(tHE.contains("Hebrew"), "modes: translate-he targets Hebrew")
+    let tTH = CleanupModes.system(modeID: "translate-th", vocabulary: vocab)
+    check(tTH.contains("Thai"), "modes: translate-th targets Thai")
+    check(tTH.contains("- Vercel"), "modes: translate-th injects vocabulary")
+    let tTHEN = CleanupModes.system(modeID: "translate-th-en", vocabulary: vocab)
+    check(tTHEN.contains("spoken Thai"), "modes: translate-th-en declares Thai source")
+    check(tTHEN.contains("fluent English"), "modes: translate-th-en targets English")
+    check(tTHEN.contains("ครับ"), "modes: translate-th-en notes Thai politeness particles")
+    check(CleanupModes.mode(id: "translate-th")?.name == "Translate → Thai", "modes: translate-th has a friendly label")
     let unknown = CleanupModes.system(modeID: "nope", vocabulary: vocab)
     check(unknown.contains("editor, not an assistant"), "modes: unknown id falls back to clean")
 }
@@ -285,6 +293,84 @@ do {
     check(History.search("", in: list).count == 2, "history: empty query returns all")
     check(History.preview("line one\nline two") == "line one line two", "history: preview flattens newlines")
     check(History.preview(String(repeating: "a", count: 60), max: 10).hasSuffix("…"), "history: preview truncates")
+}
+
+print("AutoLearn — vocabulary")
+
+do { // learns recurring proper nouns, ignores one-offs and pronouns
+    let ts = [
+        "I met Keswadee at the studio in Bangkok.",
+        "Keswadee runs the Bangkok shop.",
+        "We deployed to Vercel today.",
+    ]
+    let names = AutoLearn.vocabularyTerms(from: ts, minDistinct: 2).map { $0.term }
+    check(names.contains("Keswadee"), "autolearn: learns proper noun even when later sentence-initial")
+    check(names.contains("Bangkok"), "autolearn: learns recurring place name")
+    check(!names.contains("Vercel"), "autolearn: ignores a one-off term (minDistinct 2)")
+    check(!names.contains("I"), "autolearn: skips pronouns / short tokens")
+}
+do { // PascalCase + acronyms
+    let ts = ["The API returned an error.", "Our API is fast.",
+              "OpenRouter is great.", "I love OpenRouter."]
+    let names = AutoLearn.vocabularyTerms(from: ts, minDistinct: 2).map { $0.term }
+    check(names.contains("API"), "autolearn: learns acronym (internal caps)")
+    check(names.contains("OpenRouter"), "autolearn: learns PascalCase product name")
+}
+do { // capitalized bigram name
+    let ts = ["I work at Tattoo Genesis downtown.", "Tattoo Genesis is hiring.", "love Tattoo Genesis"]
+    let names = AutoLearn.vocabularyTerms(from: ts, minDistinct: 2).map { $0.term }
+    check(names.contains("Tattoo Genesis"), "autolearn: learns a two-word capitalized name")
+}
+do { // a bigram adjacent only across a sentence boundary is NOT counted
+    let ts = ["I love Tattoo Genesis here.", "We went to Tattoo. Genesis was closed."]
+    let names = AutoLearn.vocabularyTerms(from: ts, minDistinct: 2).map { $0.term }
+    check(!names.contains("Tattoo Genesis"), "autolearn: bigram count respects sentence boundaries")
+}
+do { // a common capitalized interjection is not learned
+    let ts = ["He said Hello there.", "She said Hello again."]
+    let names = AutoLearn.vocabularyTerms(from: ts, minDistinct: 2).map { $0.term }
+    check(!names.contains("Hello"), "autolearn: skips capitalized interjections (stopword)")
+}
+do { // exclusions: existing vocab + dismissed (case-insensitive)
+    let ts = ["I met Keswadee in Bangkok.", "Keswadee called from Bangkok."]
+    let withExisting = AutoLearn.vocabularyTerms(
+        from: ts, existing: [VocabularyEntry(term: "bangkok")], minDistinct: 2).map { $0.term.lowercased() }
+    check(!withExisting.contains("bangkok"), "autolearn: excludes terms already in vocabulary")
+    let withDismissed = AutoLearn.vocabularyTerms(
+        from: ts, dismissed: ["keswadee"], minDistinct: 2).map { $0.term.lowercased() }
+    check(!withDismissed.contains("keswadee"), "autolearn: excludes dismissed terms")
+}
+
+print("AutoLearn — snippets")
+
+do { // suggests a repeated phrase, prefers the longest
+    let ts = [
+        "Please book a consultation with the artist.",
+        "Can you please book a consultation today?",
+        "please book a consultation",
+    ]
+    let sug = AutoLearn.snippetSuggestions(from: ts, minDistinct: 2)
+    check(!sug.isEmpty, "autolearn: surfaces a recurring phrase")
+    check(sug.contains { $0.phrase.lowercased().contains("book a consultation") },
+          "autolearn: suggestion contains the repeated phrase")
+    check(sug[0].count >= 2, "autolearn: counts the repeats")
+    check(!sug[0].suggestedTrigger.isEmpty, "autolearn: proposes an editable trigger")
+}
+do { // n-grams do not glue across a sentence boundary
+    let ts = ["The shop was closed. Please call again.", "The shop was closed. Please call again."]
+    let sug = AutoLearn.snippetSuggestions(from: ts, minDistinct: 2)
+    check(!sug.contains { $0.phrase.lowercased().contains("closed please") },
+          "autolearn: snippet n-grams respect sentence boundaries")
+}
+do { // ignores non-repeated text and existing snippets (even with trailing punctuation)
+    let once = AutoLearn.snippetSuggestions(
+        from: ["a totally unique sentence that only appears one single time"], minDistinct: 2)
+    check(once.isEmpty, "autolearn: ignores phrases that do not repeat")
+    let ts = ["call me at the studio", "call me at the studio", "call me at the studio"]
+    let withExisting = AutoLearn.snippetSuggestions(
+        from: ts, existing: [Snippet(trigger: "studio", expansion: "Call me at the studio.")], minDistinct: 2)
+    check(!withExisting.contains { $0.phrase.lowercased().contains("call me at the studio") },
+          "autolearn: excludes existing snippet expansion despite punctuation/casing")
 }
 
 if failures == 0 {

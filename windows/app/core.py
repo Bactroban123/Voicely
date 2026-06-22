@@ -26,6 +26,7 @@ DEFAULT_CONFIG = {
     "transcribe_model": "openai/whisper-1",
     "cleanup": True,
     "cleanup_model": "google/gemini-2.5-flash-lite",
+    "cleanup_mode": "clean",  # clean | translate-en | translate-th | translate-th-en
     "language": "",  # "" = auto-detect
 }
 
@@ -35,6 +36,40 @@ CLEANUP_SYSTEM = (
     "('um', 'uh', false starts). Do NOT translate, answer, add, or summarize. "
     "Preserve the speaker's language and meaning. Output ONLY the cleaned text."
 )
+
+
+def _translate_system(target: str, source: str = "") -> str:
+    intro = (
+        f"You are a translation engine. The transcript is spoken {source}. "
+        f"Translate it into natural, fluent {target}."
+        if source
+        else f"You are a translation engine. Translate the transcript into natural, fluent {target}."
+    )
+    note = ""
+    if source == "Thai":
+        note = (
+            " Drop Thai politeness particles (ครับ/ค่ะ/นะ) unless they carry meaning, "
+            "and render Thai names with their common English spelling."
+        )
+    return (
+        f"{intro} Produce idiomatic {target}, not word-for-word. Remove fillers and "
+        f"false starts, use correct punctuation. Keep proper nouns, code, URLs and "
+        f"emails unchanged. Output ONLY the {target} text, nothing else.{note}"
+    )
+
+
+# Cleanup "modes" — mirrors the macOS app's CleanupModes (the useful subset).
+CLEANUP_MODES = {
+    "clean": CLEANUP_SYSTEM,
+    "translate-en": _translate_system("English"),
+    "translate-th": _translate_system("Thai (ภาษาไทย)"),
+    "translate-th-en": _translate_system("English", source="Thai"),
+}
+
+
+def system_for_mode(mode: str) -> str:
+    """The cleanup system prompt for a mode id; falls back to plain cleanup."""
+    return CLEANUP_MODES.get(mode, CLEANUP_SYSTEM)
 
 
 # ------------------------------------------------------------------ config
@@ -104,7 +139,7 @@ def cleanup_body(text: str, cfg: dict) -> dict:
     return {
         "model": cfg["cleanup_model"],
         "messages": [
-            {"role": "system", "content": CLEANUP_SYSTEM},
+            {"role": "system", "content": system_for_mode(cfg.get("cleanup_mode", "clean"))},
             {"role": "user", "content": text},
         ],
         "temperature": 0.1,

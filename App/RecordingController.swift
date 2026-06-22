@@ -126,7 +126,11 @@ final class RecordingController {
     private func runCleanup(_ raw: String) {
         let modelID = settings.cleanupModelID
         let modeID = settings.cleanupModeID
-        let vocabulary = VocabularyStore.shared.entries
+        // Effective vocabulary = your manual list + what Voicely has auto-learned.
+        var vocabulary = VocabularyStore.shared.entries
+        if settings.autoLearnEnabled {
+            vocabulary += AutoLearnStore.shared.learnedEntries
+        }
         let zeroRetention = settings.zeroRetention
         Task { [weak self] in
             guard let self else { return }
@@ -148,6 +152,15 @@ final class RecordingController {
         if !text.isEmpty {
             inserter.insert(text)
             HistoryStore.shared.record(text)
+            if settings.autoLearnEnabled {
+                // Learn recurring proper nouns from history so cleanup spells them
+                // right. Snapshot on the main thread, do the work off it.
+                let history = HistoryStore.shared.entries.map(\.text)
+                let manual = VocabularyStore.shared.entries
+                Task.detached(priority: .utility) {
+                    AutoLearnStore.shared.refreshVocabulary(history: history, manual: manual)
+                }
+            }
             onTranscript?(text)
             NSLog("Voicely inserted: %@", text)
         }

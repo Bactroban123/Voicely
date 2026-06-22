@@ -31,8 +31,16 @@ public enum CleanupModes {
     public static let translateHE = CleanupMode(
         id: "translate-he", name: "Translate → Hebrew",
         detail: "Speak any language; insert fluent Hebrew (עברית).")
+    public static let translateTH = CleanupMode(
+        id: "translate-th", name: "Translate → Thai",
+        detail: "Speak any language; insert fluent Thai (ภาษาไทย).")
+    public static let translateTHEN = CleanupMode(
+        id: "translate-th-en", name: "Thai → English",
+        detail: "Speak Thai; insert fluent English.")
 
-    public static let all: [CleanupMode] = [clean, polish, prompt, translateEN, translateHE]
+    public static let all: [CleanupMode] = [
+        clean, polish, prompt, translateEN, translateHE, translateTH, translateTHEN,
+    ]
     public static let defaultID = "clean"
 
     public static func mode(id: String) -> CleanupMode? {
@@ -45,6 +53,9 @@ public enum CleanupModes {
         case "prompt": return promptPrompt(vocabulary)
         case "translate-en": return translatePrompt(target: "English", vocabulary: vocabulary)
         case "translate-he": return translatePrompt(target: "Hebrew (עברית)", vocabulary: vocabulary)
+        case "translate-th": return translatePrompt(target: "Thai (ภาษาไทย)", vocabulary: vocabulary)
+        case "translate-th-en":
+            return translatePrompt(source: "Thai", target: "English", vocabulary: vocabulary)
         default: return CleanupPrompt.system(vocabulary: vocabulary) // clean
         }
     }
@@ -74,9 +85,22 @@ public enum CleanupModes {
         """
     }
 
-    private static func translatePrompt(target: String, vocabulary: [VocabularyEntry]) -> String {
-        """
-        You are a translation engine. Translate the transcript into natural, fluent \(target).
+    private static func translatePrompt(source: String? = nil,
+                                        target: String,
+                                        vocabulary: [VocabularyEntry]) -> String {
+        let intro = source.map {
+            "You are a translation engine. The transcript is spoken \($0). "
+            + "Translate it into natural, fluent \(target)."
+        } ?? "You are a translation engine. Translate the transcript into natural, fluent \(target)."
+
+        // Thai source has no inter-word spaces and uses politeness particles; nudge the model.
+        let sourceNote = source == "Thai"
+            ? "\n6. The source is Thai: drop politeness particles (ครับ/ค่ะ/นะ) unless they carry meaning, "
+              + "and render Thai names and places with their common English spelling."
+            : ""
+
+        return """
+        \(intro)
 
         RULES — follow exactly:
         1. Produce idiomatic \(target), not a word-for-word translation. Convey the speaker's meaning and tone.
@@ -84,7 +108,7 @@ public enum CleanupModes {
         3. Keep proper nouns, people's names, code, URLs, and email addresses unchanged — do not translate \
         them. Apply the custom-vocabulary spellings below to any that appear.
         4. If the transcript is already in \(target), simply clean it up — do not re-translate or paraphrase.
-        5. Output ONLY the \(target) text. No preamble, quotes, transliteration, notes, or the original.
+        5. Output ONLY the \(target) text. No preamble, quotes, transliteration, notes, or the original.\(sourceNote)
 
         \(vocabularyBlock(vocabulary))
         """
