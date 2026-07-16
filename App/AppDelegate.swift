@@ -29,20 +29,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateIcon(.idle)
 
         controller.onStateChange = { [weak self] state in
-            self?.updateIcon(state)
-            switch state {
-            case .idle:
-                self?.statusLabel?.title = "Voicely — idle"
-                self?.hud.hide()
-            case .recording:
-                self?.statusLabel?.title = "Voicely — listening"
-                self?.hud.show(phase: .recording, label: "Listening")
-            case .processing:
-                self?.statusLabel?.title = "Voicely — transcribing…"
-                self?.hud.show(phase: .processing, label: "Transcribing…")
-            }
+            guard let self else { return }
+            self.hudFlashGeneration += 1 // a state change outranks a pending flash restore
+            self.refreshHUD(for: state)
         }
         controller.onLevel = { [weak self] level in self?.hud.update(level: level) }
+        controller.onNotice = { [weak self] text in self?.flashHUD(text) }
 
         // Existing users (already have a key) skip onboarding; only fresh installs see it.
         let onboarded = SettingsStore.shared.hasOnboarded
@@ -158,6 +150,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func clearRecent() {
         HistoryStore.shared.clear()
+    }
+
+    // MARK: - HUD
+
+    private var hudFlashGeneration = 0
+
+    /// State-driven HUD appearance; also the restore point after a flash.
+    private func refreshHUD(for state: RecordingController.UIState) {
+        updateIcon(state)
+        switch state {
+        case .idle:
+            statusLabel?.title = "Voicely — idle"
+            hud.hide()
+        case .recording:
+            statusLabel?.title = "Voicely — listening"
+            hud.show(phase: .recording, label: "Listening")
+        case .processing:
+            statusLabel?.title = "Voicely — transcribing…"
+            hud.show(phase: .processing, label: "Transcribing…")
+        }
+    }
+
+    /// Briefly surfaces a notice ("Still finishing your last dictation…"),
+    /// then restores the state-driven appearance unless a newer state change
+    /// or flash superseded it.
+    private func flashHUD(_ text: String) {
+        hudFlashGeneration += 1
+        let generation = hudFlashGeneration
+        hud.show(phase: .processing, label: text)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in
+            guard let self, generation == self.hudFlashGeneration else { return }
+            self.refreshHUD(for: self.controller.state)
+        }
     }
 
     private func updateIcon(_ state: RecordingController.UIState) {
