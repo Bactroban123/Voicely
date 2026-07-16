@@ -7,6 +7,9 @@ import VoicelyCore
 struct MeetingDetailView: View {
     let meeting: Meeting
     var onChanged: () -> Void
+    /// Set by AppDelegate so the detail view can act on a meeting. Weak: the
+    /// controller outlives any window, and this must never keep one alive.
+    static weak var controller: MeetingController?
 
     private enum Tab: String, CaseIterable { case summary = "Summary", transcript = "Transcript", tasks = "Tasks" }
     @State private var tab: Tab = .summary
@@ -73,8 +76,44 @@ struct MeetingDetailView: View {
             if summary?.parseDegraded == true {
                 notice("The notes couldn't be structured, so the model's raw reply is shown below.")
             }
+            recoveryBar
         }
         .padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 12)
+    }
+
+    /// Without this, an interrupted meeting is visible but unrecoverable — the
+    /// audio sits on disk with no way to act on it.
+    @ViewBuilder
+    private var recoveryBar: some View {
+        let action = MeetingRecovery.action(for: meeting)
+        if action != .none {
+            HStack(spacing: 8) {
+                switch action {
+                case .offerInterrupted:
+                    Text("This recording was interrupted — its audio is still here.")
+                        .font(.system(size: 11)).foregroundStyle(Color.fpMuted)
+                    Button("Transcribe it") { Self.controller?.resume(meeting); onChanged() }
+                        .font(.system(size: 11))
+                case .resumeTranscription:
+                    Text("Recorded but not transcribed.")
+                        .font(.system(size: 11)).foregroundStyle(Color.fpMuted)
+                    Button("Transcribe") { Self.controller?.resume(meeting); onChanged() }
+                        .font(.system(size: 11))
+                case .offerRetry:
+                    Button("Retry") { Self.controller?.resume(meeting); onChanged() }
+                        .font(.system(size: 11))
+                case .offerCleanup, .none:
+                    EmptyView()
+                }
+                Button("Discard") {
+                    MeetingStore.shared.delete(meeting.id)
+                    onChanged()
+                }
+                .font(.system(size: 11))
+                Spacer()
+            }
+            .padding(.top, 4)
+        }
     }
 
     private func notice(_ text: String) -> some View {

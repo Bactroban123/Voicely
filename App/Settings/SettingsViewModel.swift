@@ -10,6 +10,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var cleanupEnabled: Bool
     @Published var cleanupModelID: String
     @Published var zeroRetention: Bool
+    @Published var keepMeetingAudio: Bool
     @Published var cleanupModeID: String
     @Published var apiKey: String
     @Published var launchAtLogin: Bool
@@ -30,6 +31,7 @@ final class SettingsViewModel: ObservableObject {
         cleanupModelID = settings.cleanupModelID
         cleanupModeID = settings.cleanupModeID
         zeroRetention = settings.zeroRetention
+        keepMeetingAudio = settings.keepMeetingAudio
         apiKey = KeychainStore.openRouterKey() ?? ""
         launchAtLogin = LaunchAtLogin.isEnabled
         vocabularyText = SettingsViewModel.render(VocabularyStore.shared.entries)
@@ -90,6 +92,7 @@ final class SettingsViewModel: ObservableObject {
         settings.cleanupModelID = cleanupModelID
         settings.cleanupModeID = cleanupModeID
         settings.zeroRetention = zeroRetention
+        settings.keepMeetingAudio = keepMeetingAudio
         settings.autoLearnEnabled = autoLearnEnabled
         KeychainStore.setOpenRouterKey(apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
         LaunchAtLogin.setEnabled(launchAtLogin)

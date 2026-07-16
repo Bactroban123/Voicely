@@ -205,6 +205,71 @@ final class MeetingSessionTests: XCTestCase {
         XCTAssertEqual(s.state, .recording(paused: false))
     }
 
+    // MARK: - Adopting a meeting off disk (crash recovery / retry)
+
+    func testAdoptingAnInterruptedRecordingResumesAtTranscription() {
+        var s = MeetingSession()
+        guard case .beginTranscription(let token) = s.adopt(hasAudio: true, hasTranscript: false) else {
+            return XCTFail("audio on disk should resume at transcription")
+        }
+        XCTAssertEqual(s.state, .transcribing(progress: 0))
+        XCTAssertTrue(s.isCurrent(token))
+        XCTAssertTrue(s.hasAudio)
+    }
+
+    func testAdoptingATranscriptSkipsStraightToTheNotes() {
+        // The audio is already spent — re-transcribing an hour to redo a
+        // summary would be the most expensive possible way to be wrong.
+        var s = MeetingSession()
+        guard case .beginSummarization = s.adopt(hasAudio: false, hasTranscript: true) else {
+            return XCTFail("a transcript on disk should resume at summarization")
+        }
+        XCTAssertEqual(s.state, .summarizing)
+        XCTAssertTrue(s.hasTranscript)
+    }
+
+    func testATranscriptWinsOverAudioWhenBothExist() {
+        var s = MeetingSession()
+        guard case .beginSummarization = s.adopt(hasAudio: true, hasTranscript: true) else {
+            return XCTFail("never re-transcribe when a transcript already exists")
+        }
+    }
+
+    func testAdoptingNothingIsRejectedAndLeavesTheSessionClean() {
+        var s = MeetingSession()
+        XCTAssertEqual(s.adopt(hasAudio: false, hasTranscript: false),
+                       .rejected(reason: "there's nothing on disk to resume"))
+        XCTAssertEqual(s.state, .idle)
+        XCTAssertFalse(s.hasAudio)
+        XCTAssertFalse(s.hasTranscript)
+    }
+
+    func testAdoptingIsRefusedWhileAMeetingIsInProgress() {
+        var s = MeetingSession()
+        _ = s.handle(.start)
+        XCTAssertEqual(s.adopt(hasAudio: true, hasTranscript: false),
+                       .rejected(reason: "finish the meeting in progress first"))
+        XCTAssertEqual(s.state, .recording(paused: false), "the live meeting must be untouched")
+    }
+
+    func testAnAdoptedMeetingsResultsAreTokenGuardedLikeAnyOther() {
+        var s = MeetingSession()
+        guard case .beginTranscription(let adopted) = s.adopt(hasAudio: true, hasTranscript: false) else {
+            return XCTFail()
+        }
+        _ = s.handle(.discard)
+        XCTAssertFalse(s.isCurrent(adopted), "a discarded recovery's results must not apply to the next meeting")
+        XCTAssertEqual(s.handle(.transcriptReady), .none)
+    }
+
+    func testAnAdoptedMeetingRunsThroughToComplete() {
+        var s = MeetingSession()
+        _ = s.adopt(hasAudio: true, hasTranscript: false)
+        XCTAssertEqual(s.handle(.transcriptReady), .beginSummarization(s.currentToken))
+        XCTAssertEqual(s.handle(.summaryReady), .notifyComplete)
+        XCTAssertEqual(s.state, .complete)
+    }
+
     // MARK: - Out-of-order events
 
     func testEventsThatDoNotApplyAreIgnored() {

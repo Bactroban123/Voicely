@@ -10,6 +10,7 @@ import VoicelyCore
 struct MeetingsView: View {
     @State private var meetings: [Meeting] = []
     @State private var selection: UUID?
+    @State private var audioBytes: Int64 = 0
     var onClose: (() -> Void)?
 
     private let store = MeetingStore.shared
@@ -29,8 +30,29 @@ struct MeetingsView: View {
 
     private func reload() {
         meetings = store.list()
+        audioBytes = store.audioBytes()
         if selection == nil || !meetings.contains(where: { $0.id == selection }) {
             selection = meetings.first?.id
+        }
+    }
+
+    /// Only shown when audio is actually being kept — meetings are the only
+    /// feature that writes hundreds of MB, so it shouldn't be a surprise.
+    @ViewBuilder
+    private var storageFooter: some View {
+        if audioBytes > 0 {
+            VStack(spacing: 4) {
+                Rectangle().fill(Color.fpHairline).frame(height: 0.5)
+                HStack {
+                    Text("Audio kept")
+                        .font(.system(size: 10)).foregroundStyle(Color.fpMuted)
+                    Spacer()
+                    Text(DiskGuard.format(bytes: audioBytes))
+                        .font(.system(size: 10, design: .monospaced)).foregroundStyle(Color.fpMuted)
+                }
+                .padding(.horizontal, 14)
+            }
+            .padding(.bottom, 8)
         }
     }
 
@@ -78,6 +100,7 @@ struct MeetingsView: View {
             }
 
             Spacer(minLength: 0)
+            storageFooter
             Button("Done") { onClose?() }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)

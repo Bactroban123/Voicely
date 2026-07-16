@@ -160,11 +160,29 @@ final class MeetingStore {
 
     // MARK: - Recovery
 
-    /// Meetings whose recording never finished — the app was killed or crashed
-    /// mid-call. Their chunks are still valid audio, so the user is offered a
-    /// choice rather than having the meeting silently vanish or silently resume.
+    /// Meetings worth telling the user about at launch: interrupted recordings,
+    /// un-transcribed audio, retryable failures. The rules live in
+    /// `MeetingRecovery` so they're testable without a filesystem.
     func needingRecovery() -> [Meeting] {
-        list().filter { $0.wasInterrupted || ($0.status == .recorded && $0.canTranscribe) }
+        MeetingRecovery.needingAttention(list())
+    }
+
+    /// Deletes empty husks — a meeting whose header exists but which never got
+    /// a single chunk, from a start that failed immediately. Silent because
+    /// there is, by definition, nothing to lose; anything with audio or a
+    /// transcript is never touched here.
+    func pruneDisposable() {
+        let disposable = list().filter(MeetingRecovery.isDisposable)
+        guard !disposable.isEmpty else { return }
+        for meeting in disposable { delete(meeting.id) }
+        VoicelyLog.meeting.info("pruned \(disposable.count) empty meeting folder(s)")
+    }
+
+    /// Free space on the volume the meetings live on — not the boot volume,
+    /// which may be a different disk entirely.
+    func freeBytes() -> Int64 {
+        let values = try? root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return values?.volumeAvailableCapacityForImportantUsage ?? .max
     }
 
     /// Bytes used by all meeting audio, for the retention UI.
