@@ -6,12 +6,24 @@
 > system-wide text insertion, IME/keyboard extensions) that frameworks abstract
 > away anyway. Ship order: **Mac (done) → iOS → Windows → Android.**
 
-These folders are intentionally empty except for this plan. Each is weeks of work;
-none is built. The Mac app (`/App`, `/VoicelyCore`) is the working reference.
+`ios/` and `android/` are intentionally empty except for this plan — each is weeks
+of work, and neither is built. The Mac app (`/App`, `/VoicelyCore`) is the working
+reference.
+
+**`windows/` is the exception, and not a happy one.** It contains a *working*
+Python tray app (hotkey, capture, clipboard insert, tests, an Inno Setup
+installer) that was built off-plan — it is not the Tauri + Rust app described
+below. It is **deliberately not shipped**, because it transcribes in the **cloud**:
+`windows/app/core.py` POSTs raw microphone audio to OpenRouter, which directly
+contradicts the product's central claim that your audio never leaves your machine.
+It rode the v0.2.0 release by mistake (3 downloads) and was pulled on 2026-07-16;
+its workflow is now manual-only and publishes nothing. It needs on-device
+transcription before it can carry the Voicely name — which is what the plan below
+was always for.
 
 ## Shared core
 - **Now:** the Swift `VoicelyCore` package (pipeline, cleanup modes, vocab,
-  snippets, hotkey state machine — 92 tests) is the Mac/iOS shared core.
+  snippets, hotkey/meeting state machines, dialogue merge) is the Mac/iOS shared core.
 - **v3:** extract a **Rust** core (STT inference, VAD, resample, cleanup
   orchestration, translation routing, license client) compiled per target.
   Blueprint: **[cjpais/Handy](https://github.com/cjpais/Handy)** (Tauri + Rust +
