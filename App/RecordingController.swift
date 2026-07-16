@@ -67,7 +67,7 @@ final class RecordingController {
                 try recorder.start()
                 apply(pipeline.handle(.startedRecording))
             } catch {
-                NSLog("Voicely: failed to start recording — \(error)")
+                VoicelyLog.recording.error("failed to start recording — \(error)")
             }
         case .stopRecording:
             pendingSamples = recorder.stop()
@@ -117,7 +117,7 @@ final class RecordingController {
                     }
                 }
             } catch {
-                NSLog("Voicely: transcribe error — \(error)")
+                VoicelyLog.recording.error("transcribe error — \(error)")
                 await MainActor.run { self.apply(self.pipeline.handle(.transcriptionFailed)) }
             }
         }
@@ -142,7 +142,7 @@ final class RecordingController {
                                                            zeroRetention: zeroRetention)
                 await MainActor.run { self.apply(self.pipeline.handle(.cleaned(cleaned))) }
             } catch {
-                NSLog("Voicely: cleanup failed, inserting raw — \(error)")
+                VoicelyLog.cleanup.warning("cleanup failed, inserting raw — \(error)")
                 await MainActor.run { self.apply(self.pipeline.handle(.cleanupFailed)) }
             }
         }
@@ -162,7 +162,8 @@ final class RecordingController {
                 }
             }
             onTranscript?(text)
-            NSLog("Voicely inserted: %@", text)
+            // Metadata only — transcript content never goes to the log.
+            VoicelyLog.insertion.info("inserted \(text.count) chars")
         }
         apply(pipeline.handle(.inserted))
     }

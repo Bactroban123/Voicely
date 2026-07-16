@@ -14,6 +14,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let onboarding = OnboardingWindowController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        CrashReporter.shared.install()
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        VoicelyLog.lifecycle.info("Voicely \(version) launched")
+        if CrashReporter.shared.lastRunEndedCleanly == false {
+            VoicelyLog.lifecycle.warning("previous session didn't exit cleanly — details in Settings → Diagnostics")
+        }
+
         NSApp.setActivationPolicy(.accessory)
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -54,6 +61,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if onboarded && !started {
             PermissionManager.openSystemSettings(.inputMonitoring)
         }
+        VoicelyLog.lifecycle.info("event tap \(started ? "started" : "NOT started (Input Monitoring missing?)")")
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        VoicelyLog.lifecycle.info("clean exit")
+        CrashReporter.shared.markCleanExit()
     }
 
     private func buildMenu(on item: NSStatusItem) {

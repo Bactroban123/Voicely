@@ -15,7 +15,7 @@ enum LaunchAtLogin {
                 try SMAppService.mainApp.unregister()
             }
         } catch {
-            NSLog("Voicely: launch-at-login change failed — \(error)")
+            VoicelyLog.settings.error("launch-at-login change failed — \(error)")
         }
     }
 }
