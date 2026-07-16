@@ -1,5 +1,4 @@
 import Foundation
-import MetricKit
 
 /// Captures hard failures so the Diagnostics tab can say what happened.
 ///
@@ -11,10 +10,14 @@ import MetricKit
 /// - Uncaught NSExceptions run in a normal (non-signal) context, so their
 ///   handler may format a real message before the runtime aborts.
 /// - A session flag file distinguishes clean exits from crashes/force-kills.
-/// - MetricKit is subscribed as best-effort corroboration only: delivery for
-///   non-App-Store apps is unreliable and roughly daily-batched, so nothing
-///   load-bearing sits on it.
-final class CrashReporter: NSObject, MXMetricManagerSubscriber {
+///
+/// Deliberately no MetricKit: `MXMetricPayload` is unavailable on macOS in
+/// SDKs before 26, so subscribing pinned the whole app to a bleeding-edge
+/// toolchain. It only ever produced a corroborating log line — delivery is
+/// unreliable and roughly daily-batched for non-App-Store apps — so it cost
+/// far more than it paid. The signal/exception handlers and the tap-latency
+/// canary carry the real diagnostics.
+final class CrashReporter: NSObject {
     static let shared = CrashReporter()
 
     /// nil until `install()` runs. False means the previous session ended in a
@@ -80,8 +83,6 @@ final class CrashReporter: NSObject, MXMetricManagerSubscriber {
         }
 
         NSSetUncaughtExceptionHandler(uncaughtExceptionHandler)
-
-        MXMetricManager.shared.add(self)
     }
 
     /// Call from applicationWillTerminate so a normal quit isn't reported as a crash.
@@ -103,17 +104,6 @@ final class CrashReporter: NSObject, MXMetricManagerSubscriber {
         fsync(crashFD)
     }
 
-    // MARK: - MXMetricManagerSubscriber (corroboration only)
-
-    func didReceive(_ payloads: [MXDiagnosticPayload]) {
-        let crashes = payloads.reduce(0) { $0 + ($1.crashDiagnostics?.count ?? 0) }
-        let hangs = payloads.reduce(0) { $0 + ($1.hangDiagnostics?.count ?? 0) }
-        if crashes > 0 || hangs > 0 {
-            VoicelyLog.lifecycle.warning("MetricKit delivered \(crashes) crash / \(hangs) hang diagnostics")
-        }
-    }
-
-    func didReceive(_ payloads: [MXMetricPayload]) {}
 }
 
 /// Async-signal-safe: only `write(2)`, `signal(2)`, `raise(2)` on pre-computed data.
