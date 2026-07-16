@@ -141,8 +141,14 @@ public struct DictationSession {
 
     public mutating func recordingFailedToStart(_ token: Token) -> Effect {
         guard token == currentToken, takeInFlight else { return .none }
-        // Pipeline never saw .startedRecording, so it is still idle; only the
-        // hotkey FSM needs unwinding or the next press becomes a phantom stop.
+        // This is the one completion that doesn't route through Pipeline (a
+        // failed start means the pipeline never left .idle, so there's nothing
+        // to unwind there — only the hotkey FSM, or the next press becomes a
+        // phantom stop). That makes the .idle precondition ours to enforce:
+        // without this guard, a failure delivered AFTER a success for the same
+        // take would strand the pipeline in .recording while clearing
+        // takeInFlight, and every press would busy-reject until Esc.
+        guard pipeline.state == .idle else { return .none }
         // Invalidate too, so a duplicate late `started` can't revive the take.
         invalidateToken()
         takeInFlight = false
