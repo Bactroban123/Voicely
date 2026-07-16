@@ -30,6 +30,7 @@ final class RecordingController {
     /// Returns false if the event tap couldn't start (Input Monitoring not granted).
     func start() -> Bool {
         recorder.onLevel = { [weak self] level in self?.onLevel?(level) }
+        recorder.prewarm()
         reconfigure()
         NotificationCenter.default.addObserver(forName: .voicelySettingsChanged, object: nil, queue: .main) { [weak self] _ in
             self?.reconfigure()
@@ -58,23 +59,48 @@ final class RecordingController {
 
     // MARK: - Hotkey
 
+    /// Runs on the main run loop from inside the CGEventTap callback: only the
+    /// (cheap, timestamp-sensitive) hotkey FSM runs synchronously here. All
+    /// recorder I/O is enqueued on the recorder's serial queue and the matching
+    /// pipeline event is applied back on main from its completion, so pipeline
+    /// events keep the same FIFO order as the recorder operations they follow.
     private func handle(_ event: KeyEvent) {
         guard let output = hotKey.process(event) else { return }
         switch output {
         case .startRecording:
             pipeline.cleanupEnabled = settings.cleanupEnabled
-            do {
-                try recorder.start()
-                apply(pipeline.handle(.startedRecording))
-            } catch {
-                VoicelyLog.recording.error("failed to start recording — \(error)")
+            recorder.start { [weak self] result in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    switch result {
+                    case .success(let ms):
+                        VoicelyLog.recording.info("recording started in \(ms)ms")
+                        self.apply(self.pipeline.handle(.startedRecording))
+                    case .failure(let error):
+                        // Pipeline never saw .startedRecording, so it stays idle;
+                        // the hotkey-FSM unwind for this lands with DictationSession.
+                        VoicelyLog.recording.error("failed to start recording — \(error)")
+                    }
+                }
             }
         case .stopRecording:
-            pendingSamples = recorder.stop()
-            apply(pipeline.handle(.stoppedRecording))
+            recorder.stop { [weak self] samples in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.pendingSamples = samples
+                    self.apply(self.pipeline.handle(.stoppedRecording))
+                }
+            }
         case .cancel:
-            recorder.stop()
-            apply(pipeline.handle(.cancelled))
+            // The pipeline event rides the recorder completion so it lands
+            // AFTER a still-in-flight start's .startedRecording — otherwise a
+            // fast press→Esc could leave the pipeline stuck in .recording.
+            recorder.stop { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.apply(self.pipeline.handle(.cancelled))
+                }
+            }
         }
     }
 

@@ -3,13 +3,32 @@ import Foundation
 
 /// Captures microphone audio and converts it to the 16 kHz mono Float32 the
 /// transcription engines expect, while reporting RMS levels for the HUD waveform.
-/// Triggers the microphone permission prompt on first `start()`.
+/// Triggers the microphone permission prompt on first `start`.
+///
+/// All engine work runs on a private serial queue: `start`/`stop`/`prewarm`
+/// return immediately, so the CGEventTap callback that drives them never waits
+/// on CoreAudio (a stalled tap callback lags keyboard input system-wide and
+/// gets the tap force-disabled). The serial queue also guarantees start/stop
+/// FIFO ordering, which `installTap`/`removeTap` pairing depends on.
+enum AudioRecorderError: Error {
+    /// The input device reported a 0 Hz / 0-channel format — no usable mic
+    /// (or a device switch is still settling). installTap would throw an
+    /// uncatchable NSException with such a format, so we refuse first.
+    case noUsableInputDevice
+}
+
 final class AudioRecorder {
     private let engine = AVAudioEngine()
-    private var converter: AVAudioConverter?
     private let targetFormat = AudioRecorder.makeTargetFormat()
     private var samples: [Float] = []
     private let lock = NSLock()
+
+    /// Serializes every touch of `engine`/`isCapturing`. (Each tap's converter
+    /// is captured by that tap's closure and lives on the tap-callback thread.)
+    private let queue = DispatchQueue(label: "com.voicely.audio", qos: .userInitiated)
+    /// Queue-confined: whether a tap is installed and the engine is running.
+    private var isCapturing = false
+    private var configObserver: NSObjectProtocol?
 
     /// The 16kHz mono Float32 format the transcription engines expect. These
     /// parameters are fixed and valid, so this cannot fail in practice; the
@@ -27,31 +46,117 @@ final class AudioRecorder {
     /// Called on the main queue with the latest RMS level (0...~1).
     var onLevel: ((Float) -> Void)?
 
-    func start() throws {
-        lock.lock(); samples.removeAll(keepingCapacity: true); lock.unlock()
+    init() {
+        // Default-device switches (e.g. Bluetooth headset connecting) reset the
+        // engine; rebuild capture instead of silently recording nothing.
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.queue.async { self.handleConfigurationChange() }
+        }
+    }
 
+    deinit {
+        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
+    }
+
+    /// Pre-allocates engine resources so the next `start` is as fast as possible.
+    /// Touching `inputNode` first is what actually pulls the input HAL unit
+    /// into the graph — `prepare()` on an untouched engine prepares an empty
+    /// graph and pre-warms nothing.
+    func prewarm() {
+        queue.async { [self] in
+            _ = engine.inputNode.outputFormat(forBus: 0)
+            engine.prepare()
+        }
+    }
+
+    /// Begins capture. `completion` runs on the recorder's queue with the
+    /// engine-start latency in ms, or the error.
+    func start(completion: @escaping (Result<Int, Error>) -> Void) {
+        queue.async { [self] in
+            if isCapturing {
+                // Shouldn't happen once the session FSM is unified; defensive
+                // teardown beats an installTap-twice NSException.
+                VoicelyLog.recording.warning("start requested while already capturing — restarting")
+                tearDownCapture()
+            }
+            lock.lock(); samples.removeAll(keepingCapacity: true); lock.unlock()
+            let began = CFAbsoluteTimeGetCurrent()
+            do {
+                try beginCapture()
+                isCapturing = true
+                completion(.success(Int((CFAbsoluteTimeGetCurrent() - began) * 1000)))
+            } catch {
+                isCapturing = false
+                completion(.failure(error))
+            }
+        }
+    }
+
+    /// Ends capture. `completion` runs on the recorder's queue with everything
+    /// captured since `start`. Also re-arms the engine for the next press.
+    func stop(completion: @escaping ([Float]) -> Void) {
+        queue.async { [self] in
+            if isCapturing { tearDownCapture() }
+            lock.lock(); let result = samples; lock.unlock()
+            engine.prepare() // re-arm so the next start stays snappy
+            completion(result)
+        }
+    }
+
+    // MARK: - Queue-confined internals
+
+    private func beginCapture() throws {
         let input = engine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
-        converter = AVAudioConverter(from: inputFormat, to: targetFormat)
+        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
+            throw AudioRecorderError.noUsableInputDevice
+        }
 
-        // TODO(perf, Phase 6): installTap is recommended off the main thread.
+        // The converter is captured by THIS tap's closure (not a shared stored
+        // property): an in-flight callback from an old tap can never race a
+        // rebuild's reassignment or feed an old-format buffer to a new converter.
+        let converter = AVAudioConverter(from: inputFormat, to: targetFormat)
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-            self?.process(buffer)
+            self?.process(buffer, with: converter)
         }
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            input.removeTap(onBus: 0) // never leak the tap: a second install would crash
+            throw error
+        }
     }
 
-    @discardableResult
-    func stop() -> [Float] {
+    private func tearDownCapture() {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
-        lock.lock(); let result = samples; lock.unlock()
-        return result
+        isCapturing = false
     }
 
-    private func process(_ buffer: AVAudioPCMBuffer) {
-        guard let converter = converter else { return }
+    private func handleConfigurationChange() {
+        guard isCapturing else {
+            VoicelyLog.recording.info("audio config changed while idle — re-arming engine")
+            engine.prepare()
+            return
+        }
+        VoicelyLog.recording.warning("audio config changed mid-recording — rebuilding capture")
+        tearDownCapture()
+        do {
+            try beginCapture() // samples so far are preserved; brief gap at the switch
+            isCapturing = true
+        } catch {
+            // Accepted limitation: capture does not auto-resume later — the take
+            // ends here (partial samples still return from the eventual stop).
+            VoicelyLog.recording.error("could not rebuild capture after device change — take truncated: \(error)")
+        }
+    }
+
+    private func process(_ buffer: AVAudioPCMBuffer, with converter: AVAudioConverter?) {
+        guard let converter else { return }
         let ratio = targetFormat.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1_024
         guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else { return }
