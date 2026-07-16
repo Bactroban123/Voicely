@@ -1,10 +1,6 @@
 import AVFoundation
-import FluidAudio
 import Foundation
 import VoicelyCore
-
-// Note: `Speaker` is qualified throughout — FluidAudio exports a Speaker type
-// of its own (from its diarizer), so the bare name is ambiguous here.
 
 /// Turns a meeting's recorded chunks into a two-speaker dialogue.
 ///
@@ -13,9 +9,9 @@ import VoicelyCore
 /// attribution is already known before a word is transcribed. `DialogueMerge`
 /// then weaves them together by time.
 ///
-/// Deliberately its own engine instance, at `.utility`: an actor serialises its
-/// queue, so sharing the dictation engine would make the next hotkey press wait
-/// behind an hour of meeting audio. Dictation stays instant.
+/// Deliberately its own transcriber instance, never dictation's: an actor
+/// serialises its queue, so sharing would make the next hotkey press wait behind
+/// an hour of meeting audio.
 @available(macOS 14.2, *)
 actor MeetingTranscriptionService {
     struct Progress: Equatable {
@@ -33,20 +29,35 @@ actor MeetingTranscriptionService {
         }
     }
 
-    private var manager: AsrManager?
+    private let transcriber: MeetingTranscriber
+
+    /// Uses the model the user chose for dictation. Substituting a faster engine
+    /// would silently downgrade a Hebrew speaker's meetings to one that can't
+    /// read Hebrew — and Hebrew is the product's own differentiator.
+    init(modelID: String) {
+        switch modelID {
+        case "whisper-large-v3-turbo":
+            transcriber = WhisperMeetingTranscriber()
+        default:
+            // Parakeet v3 covers the same English as v2 plus 24 more languages
+            // at the same speed, and a call is likelier than a dictation to
+            // contain one of them.
+            transcriber = ParakeetMeetingTranscriber(version: .v3)
+        }
+    }
 
     /// Transcribes both tracks and returns the merged dialogue.
     ///
     /// - Parameters:
-    ///   - mic: mic chunks in recording order (may be empty).
-    ///   - system: system-audio chunks in recording order (empty when the tap
-    ///     was refused — the meeting is then one-sided but still transcribed).
+    ///   - mic: mic chunks in recording order, each with its wall-clock offset.
+    ///   - system: system-audio chunks (empty when the tap was refused — the
+    ///     meeting is then one-sided but still transcribed).
     ///   - onProgress: fires on this actor as chunks complete.
-    func transcribe(mic: [URL],
-                    system: [URL],
+    func transcribe(mic: [(URL, RecordedChunk)],
+                    system: [(URL, RecordedChunk)],
                     onProgress: @Sendable (Progress) -> Void = { _ in }) async throws -> [TranscriptSegment] {
         guard !mic.isEmpty || !system.isEmpty else { throw TranscriptionError.noAudio }
-        try await prepare()
+        try await transcriber.prepare()
 
         let total = mic.count + system.count
         var completed = 0
@@ -55,78 +66,37 @@ actor MeetingTranscriptionService {
             onProgress(Progress(completedChunks: completed, totalChunks: total))
         }
 
-        let meSegments = try await segments(for: mic, speaker: VoicelyCore.Speaker.me, onChunk: tick)
-        let themSegments = try await segments(for: system, speaker: VoicelyCore.Speaker.them, onChunk: tick)
+        let meSegments = await segments(for: mic, speaker: VoicelyCore.Speaker.me, onChunk: tick)
+        let themSegments = await segments(for: system, speaker: VoicelyCore.Speaker.them, onChunk: tick)
         return DialogueMerge.merge(me: meSegments, them: themSegments)
     }
 
     // MARK: - Internals
 
-    private func prepare() async throws {
-        guard manager == nil else { return }
-        // v3 (multilingual) rather than dictation's English-default v2: a call
-        // is likelier to contain another language than a dictation is, and the
-        // cost is a slightly larger model we're loading in the background anyway.
-        let models = try await AsrModels.downloadAndLoad(version: .v3)
-        let manager = AsrManager()
-        try await manager.loadModels(models)
-        self.manager = manager
-    }
-
     /// Transcribes one track, placing every segment on the meeting's timeline.
-    private func segments(for chunks: [URL],
+    private func segments(for chunks: [(URL, RecordedChunk)],
                           speaker: VoicelyCore.Speaker,
-                          onChunk: () -> Void) async throws -> [TranscriptSegment] {
-        guard !chunks.isEmpty, let manager else { return [] }
+                          onChunk: () -> Void) async -> [TranscriptSegment] {
+        guard !chunks.isEmpty else { return [] }
 
-        // Durations are MEASURED, never assumed: chunks are nominally 5 minutes,
-        // but the last one is short and a rotation failure or device change can
-        // shorten any of them. Assuming the nominal length would drift every
-        // later timestamp, silently.
-        let timeline = ChunkTimeline(durations: chunks.map { Self.duration(of: $0) })
+        // Offsets come from the recorder's wall clock, not from summing
+        // durations: lost audio (a device switch, a failed chunk open, a ring
+        // overflow) advances the clock without growing the file, and summing
+        // would then run one track early and interleave the wrong speaker.
+        let timeline = ChunkTimeline(chunks: chunks.map(\.1))
 
         var placed: [TranscriptSegment] = []
-        for (index, url) in chunks.enumerated() {
+        for (index, chunk) in chunks.enumerated() {
             defer { onChunk() }
-            guard Self.duration(of: url) > 0 else { continue }
+            guard chunk.1.duration > 0 else { continue }
             do {
-                // Fresh decoder state per chunk: chunks are independent files,
-                // and carrying state across them would let one chunk's tail
-                // bleed into the next one's opening words.
-                var decoderState = TdtDecoderState.make(decoderLayers: await manager.decoderLayerCount)
-                // The URL overload streams from disk for long files, so a 5-min
-                // chunk never lands in memory as one big [Float].
-                let result = try await manager.transcribe(url, decoderState: &decoderState)
-                let chunkSegments = Self.segments(from: result, speaker: speaker)
+                let chunkSegments = try await transcriber.segments(inChunk: chunk.0, speaker: speaker)
                 placed += timeline.place(chunkSegments, fromChunk: index)
             } catch {
                 // One bad chunk must not lose the rest of the meeting.
-                VoicelyLog.meeting.error("chunk \(url.lastPathComponent) failed to transcribe — \(error)")
+                VoicelyLog.meeting.error("chunk \(chunk.0.lastPathComponent) failed to transcribe — \(error)")
             }
         }
         return placed
-    }
-
-    /// Maps the engine's timings onto the pure grouping logic in VoicelyCore.
-    ///
-    /// The grouping itself lives there because getting it wrong is invisible:
-    /// an earlier version trimmed each token before joining and welded every
-    /// word together ("Hey,canyouhearme"). It compiled, and every test built
-    /// from hand-made segments passed. Only real audio caught it — so the rule
-    /// now lives where a test can pin it, against a real captured token stream.
-    private static func segments(from result: ASRResult, speaker: VoicelyCore.Speaker) -> [TranscriptSegment] {
-        guard let timings = result.tokenTimings, !timings.isEmpty else {
-            // No timings: keep the text rather than drop it, spanning the chunk.
-            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { return [] }
-            return [TranscriptSegment(speaker: speaker, text: text, start: 0, end: result.duration)]
-        }
-        let tokens = timings.map { TimedToken(text: $0.token, start: $0.startTime, end: $0.endTime) }
-        return TokenGrouping.segments(from: tokens, speaker: speaker)
-    }
-
-    private static func duration(of url: URL) -> TimeInterval {
-        guard let file = try? AVAudioFile(forReading: url) else { return 0 }
-        return Double(file.length) / file.processingFormat.sampleRate
     }
 }
