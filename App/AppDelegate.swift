@@ -3,12 +3,24 @@ import VoicelyCore
 
 /// Menu-bar-only app. Owns the status item, the recording controller, the
 /// floating HUD, and the settings window, and reflects recording state in the icon.
+///
+/// @MainActor because every AppKit delegate callback and menu action here is
+/// main-thread by contract — stating it lets the compiler check the boundary
+/// with the meeting vertical instead of taking our word for it.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var statusLabel: NSMenuItem?
     private var modeMenu: NSMenu?
     private let recentMenu = NSMenu()
     private let controller = RecordingController()
+    /// Meetings live in their own vertical: their own controller, their own
+    /// status item. Nothing here is shared with dictation, so a meeting can
+    /// record while the user dictates.
+    private var meetings: AnyObject?
+    private var meetingStatusItem: NSStatusItem?
+    private var meetingMenuItem: NSMenuItem?
+    private var meetingsWindow: AnyObject?
     private let hud = HUDController()
     private let settingsWindow = SettingsWindowController()
     private let onboarding = OnboardingWindowController()
@@ -50,6 +62,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             onboarding.show { SettingsStore.shared.hasOnboarded = true }
         }
 
+        if #available(macOS 14.2, *) { setUpMeetings() }
+
         let started = controller.start()
         if onboarded && !started {
             PermissionManager.openSystemSettings(.inputMonitoring)
@@ -90,6 +104,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recentItem.submenu = recentMenu
         menu.addItem(recentItem)
 
+        if #available(macOS 14.2, *) {
+            menu.addItem(.separator())
+            let meeting = NSMenuItem(title: "Start Meeting Recording",
+                                     action: #selector(toggleMeeting), keyEquivalent: "")
+            meeting.target = self
+            menu.addItem(meeting)
+            meetingMenuItem = meeting
+
+            let list = NSMenuItem(title: "Meetings…", action: #selector(openMeetings), keyEquivalent: "")
+            list.target = self
+            menu.addItem(list)
+        }
+
         let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
@@ -102,6 +129,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openSettings() {
         settingsWindow.show()
+    }
+
+    // MARK: - Meetings
+
+    @available(macOS 14.2, *)
+    private var meetingController: MeetingController? { meetings as? MeetingController }
+
+    @available(macOS 14.2, *)
+    private func setUpMeetings() {
+        let controller = MeetingController()
+        meetings = controller
+        meetingsWindow = MeetingsWindowController()
+        // The list refreshes itself when stored meetings change, so a window
+        // left open during a call stays honest.
+        controller.onMeetingsChanged = { NotificationCenter.default.post(name: .voicelyMeetingsChanged, object: nil) }
+        controller.onNotice = { [weak self] text in self?.flashHUD(text) }
+        controller.onStateChange = { [weak self] state in self?.refreshMeetingUI(state) }
+    }
+
+    @objc private func openMeetings() {
+        guard #available(macOS 14.2, *) else { return }
+        (meetingsWindow as? MeetingsWindowController)?.show()
+    }
+
+    @objc private func toggleMeeting() {
+        guard #available(macOS 14.2, *), let meetings = meetingController else { return }
+        meetings.isRecording ? meetings.stop() : meetings.start()
+    }
+
+    @available(macOS 14.2, *)
+    private func refreshMeetingUI(_ state: MeetingSession.State) {
+        switch state {
+        case .recording:
+            meetingMenuItem?.title = "Stop & Save Meeting"
+            showMeetingIndicator(true)
+        case .stopping, .transcribing, .summarizing:
+            meetingMenuItem?.title = "Finishing the meeting…"
+            showMeetingIndicator(true)
+        case .idle, .complete, .failed:
+            meetingMenuItem?.title = "Start Meeting Recording"
+            showMeetingIndicator(false)
+        }
+    }
+
+    /// A second status item, deliberately: DESIGN.md reserves the live-cyan
+    /// tint for dictation capture, so reusing it would make "recording a
+    /// meeting" and "listening to you" indistinguishable — and both can be true
+    /// at once.
+    private func showMeetingIndicator(_ visible: Bool) {
+        guard visible else {
+            if let item = meetingStatusItem { NSStatusBar.system.removeStatusItem(item) }
+            meetingStatusItem = nil
+            return
+        }
+        guard meetingStatusItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        let image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: "Meeting recording")
+        image?.isTemplate = false
+        item.button?.image = image
+        // Terracotta from DESIGN.md's danger token — unmistakably not live-cyan.
+        item.button?.contentTintColor = NSColor(srgbRed: 0.86, green: 0.42, blue: 0.30, alpha: 1)
+        item.button?.toolTip = "Voicely is recording this meeting"
+        meetingStatusItem = item
     }
 
     @objc private func selectMode(_ sender: NSMenuItem) {
