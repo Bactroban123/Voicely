@@ -25,7 +25,22 @@ final class MeetingController {
 
     // MARK: - Intent
 
-    func start() { apply(session.handle(.start)) }
+    func start() {
+        // Check before the FSM moves: running the disk dry mid-call would fail
+        // the recording AND whatever else the user is doing. Refusing now costs
+        // them a menu click; refusing in 40 minutes costs them the meeting.
+        switch DiskGuard.check(freeBytes: store.freeBytes()) {
+        case .refuse(let free):
+            onNotice?("Not enough disk space to record — \(DiskGuard.format(bytes: free)) free")
+            VoicelyLog.meeting.warning("refusing to record: only \(DiskGuard.format(bytes: free)) free")
+            return
+        case .tight(let hours):
+            onNotice?(String(format: "Low disk space — room for about %.0f more hour(s) of recording", max(hours, 0)))
+        case .ok:
+            break
+        }
+        apply(session.handle(.start))
+    }
     func stop() { apply(session.handle(.stop)) }
     func pause() { apply(session.handle(.pause)) }
     func resume() { apply(session.handle(.resume)) }
@@ -33,6 +48,42 @@ final class MeetingController {
     func discard() { apply(session.handle(.discard)) }
 
     var isRecording: Bool { session.isRecording }
+
+    // MARK: - Recovery
+
+    /// Called once at launch. Anything the app was mid-way through when it died
+    /// is offered back rather than left as an orphan folder — a meeting cannot
+    /// be re-recorded, so the bias is always toward handing the audio back.
+    func recoverInterruptedMeetings() {
+        store.pruneDisposable()   // empty husks only; nothing with audio is touched
+        let pending = store.needingRecovery()
+        guard !pending.isEmpty else { return }
+
+        for meeting in pending {
+            let action = MeetingRecovery.action(for: meeting)
+            VoicelyLog.meeting.info("meeting \(meeting.id) needs attention — \(String(describing: action))")
+        }
+        // Deliberately a notice, not a modal: the app has just launched, the
+        // user is probably doing something else, and the meetings are safe on
+        // disk. The Meetings window shows each one's state and offers retry.
+        let noun = pending.count == 1 ? "meeting" : "meetings"
+        onNotice?("\(pending.count) unfinished \(noun) — open Meetings to finish or discard")
+        onMeetingsChanged?()
+    }
+
+    /// Re-runs whatever stage a stored meeting is stuck at. Used by the
+    /// Meetings window's retry button, and by recovery.
+    func resume(_ meeting: Meeting) {
+        guard MeetingRecovery.action(for: meeting) != .none,
+              !MeetingRecovery.isDisposable(meeting) else { return }
+        activeMeeting = meeting
+        // A transcript on disk means the audio is already spent — adopt() picks
+        // the right stage, so an hour is never re-transcribed to redo notes.
+        let hasTranscript = !store.transcript(for: meeting.id).isEmpty
+        let effect = session.adopt(hasAudio: meeting.canTranscribe, hasTranscript: hasTranscript)
+        if case .rejected = effect { activeMeeting = nil }
+        apply(effect)
+    }
 
     // MARK: - Effects
 

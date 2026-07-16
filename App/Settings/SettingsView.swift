@@ -342,6 +342,30 @@ struct SettingsView: View {
                 }
                 .disabled(!model.cleanupEnabled)
                 .opacity(model.cleanupEnabled ? 1 : 0.45)
+
+                // Deliberately outside the card above: meeting audio sits on
+                // disk whether or not AI cleanup is switched on, so gating this
+                // behind cleanupEnabled would hide it from exactly the
+                // privacy-minded user most likely to want it.
+                FPCard {
+                    HStack(spacing: 10) {
+                        Image(systemName: "waveform.badge.exclamationmark")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Color.fpMuted)
+                            .frame(width: 20)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Keep meeting audio")
+                                .font(.system(size: 13))
+                                .foregroundStyle(Color.fpText)
+                            Text("Off: recordings are deleted once transcribed (~230 MB per hour)")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.fpMuted)
+                        }
+                        Spacer()
+                        Toggle("", isOn: $model.keepMeetingAudio).labelsHidden()
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 14)
+                }
             }
             .padding(16)
         }

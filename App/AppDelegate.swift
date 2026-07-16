@@ -146,6 +146,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         controller.onMeetingsChanged = { NotificationCenter.default.post(name: .voicelyMeetingsChanged, object: nil) }
         controller.onNotice = { [weak self] text in self?.flashHUD(text) }
         controller.onStateChange = { [weak self] state in self?.refreshMeetingUI(state) }
+        MeetingDetailView.controller = controller
+        // Anything the app was part-way through when it last died gets offered
+        // back rather than left as an orphan folder.
+        controller.recoverInterruptedMeetings()
     }
 
     @objc private func openMeetings() {

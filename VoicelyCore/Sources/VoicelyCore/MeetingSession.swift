@@ -224,6 +224,38 @@ public struct MeetingSession {
         }
     }
 
+    /// Adopts a meeting that already exists on disk — one the app was part-way
+    /// through when it died, or a failed stage the user is retrying.
+    ///
+    /// A first-class entry point rather than replaying `.start`/`.stop` and
+    /// discarding their effects: that trick works, but it silently depends on
+    /// the caller dropping exactly the right ones, and would break the moment
+    /// anyone touched the reducer. This mints a fresh token, so the recovered
+    /// meeting's async results are guarded like any other.
+    public mutating func adopt(hasAudio: Bool, hasTranscript: Bool) -> Effect {
+        guard case .idle = state else {
+            return .rejected(reason: "finish the meeting in progress first")
+        }
+        generation += 1
+        currentToken = Token(value: generation)
+        self.hasAudio = hasAudio
+        self.hasTranscript = hasTranscript
+
+        // A transcript means the audio is already spent — resume at the notes,
+        // never re-transcribe an hour that's already been done.
+        if hasTranscript {
+            state = .summarizing
+            return .beginSummarization(currentToken)
+        }
+        if hasAudio {
+            state = .transcribing(progress: 0)
+            return .beginTranscription(currentToken)
+        }
+        self.hasAudio = false
+        self.hasTranscript = false
+        return .rejected(reason: "there's nothing on disk to resume")
+    }
+
     /// Async results carry the token of the meeting they belong to; anything
     /// stale compares unequal and is dropped.
     public func isCurrent(_ token: Token) -> Bool { token == currentToken }
