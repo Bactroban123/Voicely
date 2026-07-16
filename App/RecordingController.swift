@@ -236,7 +236,16 @@ final class RecordingController {
                 // (visible in Copy Diagnostics) on every cancelled dictation.
                 if Task.isCancelled { return }
                 VoicelyLog.cleanup.warning("cleanup failed, inserting raw — \(error)")
-                await MainActor.run { self.apply(self.session.cleanupFailed(token: token)) }
+                await MainActor.run {
+                    // The raw fallback is right (never lose the dictation) but
+                    // it isn't self-explanatory: in a translate mode the raw
+                    // text is the UNTRANSLATED source language, so a silent
+                    // fallback looks like the mode simply didn't work.
+                    if case CleanupError.truncated = error {
+                        self.onNotice?("Too long to clean up — pasted as spoken")
+                    }
+                    self.apply(self.session.cleanupFailed(token: token))
+                }
             }
         }
     }
