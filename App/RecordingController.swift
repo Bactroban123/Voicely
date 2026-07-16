@@ -18,6 +18,9 @@ final class RecordingController {
     var onTranscript: ((String) -> Void)?
     /// Transient user-facing hints ("still finishing…", "couldn't start").
     var onNotice: ((String) -> Void)?
+    /// How many times macOS disabled the event tap and we re-enabled it
+    /// (surfaced in Diagnostics; should stay 0 in normal use).
+    private(set) var tapRecoveries = 0
 
     private let settings = SettingsStore.shared
     private var session = DictationSession(config: HotKeyConfig(hotKeyCode: 61),
@@ -28,6 +31,11 @@ final class RecordingController {
     private var engine: TranscriptionEngine = ParakeetEngine(version: .v2)
     private let inserter = TextInserter()
     private let cleanup = CleanupService()
+    /// Retained so Esc can abort in-flight work instead of paying for results
+    /// the token guard will drop anyway.
+    private var transcriptionTask: Task<Void, Never>?
+    private var cleanupTask: Task<Void, Never>?
+    private var settingsObserver: NSObjectProtocol?
     private lazy var monitor = KeyEventMonitor { [weak self] event in
         self?.handle(event) // CGEventTap callbacks fire on the main run loop
     }
@@ -36,11 +44,25 @@ final class RecordingController {
     func start() -> Bool {
         recorder.onLevel = { [weak self] level in self?.onLevel?(level) }
         recorder.prewarm()
+        monitor.onTapIssue = { [weak self] _, unreliable in
+            self?.tapRecoveries += 1
+            if unreliable {
+                // Self-healing isn't keeping up — say so instead of looking
+                // dead. Latched to once per burst by TapDisableTracker.
+                self?.onNotice?("Hotkey may be unreliable — try relaunching Voicely")
+            }
+        }
         reconfigure()
-        NotificationCenter.default.addObserver(forName: .voicelySettingsChanged, object: nil, queue: .main) { [weak self] _ in
+        settingsObserver = NotificationCenter.default.addObserver(
+            forName: .voicelySettingsChanged, object: nil, queue: .main
+        ) { [weak self] _ in
             self?.reconfigure()
         }
         return monitor.start()
+    }
+
+    deinit {
+        if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
     }
 
     /// Re-read settings: hotkey and the selected on-device engine.
@@ -124,10 +146,11 @@ final class RecordingController {
 
         case .cancelPipelineWork:
             // The session guarantees the recorder isn't live here. Token
-            // invalidation already makes any late result a no-op; actual Task
-            // cancellation of the network call lands with the cleanup-timeout
-            // slice. Nothing pastes either way.
-            VoicelyLog.recording.info("dictation cancelled while processing — late results will be dropped")
+            // invalidation alone already makes any late result a no-op; these
+            // cancels just stop paying for work nobody will read.
+            transcriptionTask?.cancel()
+            cleanupTask?.cancel()
+            VoicelyLog.recording.info("dictation cancelled while processing — in-flight work aborted")
 
         case .beginTranscription(let token):
             runTranscription(token: token)
@@ -160,10 +183,12 @@ final class RecordingController {
 
     private func runTranscription(token: DictationSession.Token) {
         let samples = pendingSamples
-        Task { [weak self] in
+        transcriptionTask?.cancel()
+        transcriptionTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let text = try await self.engine.transcribe(samples)
+                if Task.isCancelled { return }
                 let expanded = SnippetExpander.expand(text, snippets: SnippetStore.shared.snippets)
                 await MainActor.run {
                     if expanded.isEmpty {
@@ -173,6 +198,11 @@ final class RecordingController {
                     }
                 }
             } catch {
+                // Check the flag, not the error type: cancellation surfaces as
+                // CancellationError from some paths but as a domain-specific
+                // error from others (URLSession throws URLError.cancelled), and
+                // a cancelled take has nothing to report either way.
+                if Task.isCancelled { return }
                 VoicelyLog.recording.error("transcribe error — \(error)")
                 await MainActor.run { self.apply(self.session.transcriptionFailed(token: token)) }
             }
@@ -188,7 +218,8 @@ final class RecordingController {
             vocabulary += AutoLearnStore.shared.learnedEntries
         }
         let zeroRetention = settings.zeroRetention
-        Task { [weak self] in
+        cleanupTask?.cancel()
+        cleanupTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let cleaned = try await self.cleanup.clean(raw,
@@ -196,8 +227,14 @@ final class RecordingController {
                                                            modeID: modeID,
                                                            vocabulary: vocabulary,
                                                            zeroRetention: zeroRetention)
+                if Task.isCancelled { return }
                 await MainActor.run { self.apply(self.session.cleaned(cleaned, token: token)) }
             } catch {
+                // Esc cancels this Task, and URLSession reports that as
+                // URLError.cancelled — NOT CancellationError. Matching on the
+                // error type would miss it and log a false "cleanup failed"
+                // (visible in Copy Diagnostics) on every cancelled dictation.
+                if Task.isCancelled { return }
                 VoicelyLog.cleanup.warning("cleanup failed, inserting raw — \(error)")
                 await MainActor.run { self.apply(self.session.cleanupFailed(token: token)) }
             }

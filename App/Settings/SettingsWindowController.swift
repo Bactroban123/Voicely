@@ -31,6 +31,13 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        // Tear the SwiftUI tree down. isReleasedWhenClosed is false, so closing
+        // only orders the window out: the hierarchy stayed mounted and its
+        // .onDisappear never fired — leaving the Monsters arena's 60Hz timer
+        // running in the background until Settings was reopened. Safe because
+        // show() always builds a fresh contentViewController anyway.
+        window?.contentViewController = nil
+
         // Return to menu-bar-only.
         NSApp.setActivationPolicy(.accessory)
     }

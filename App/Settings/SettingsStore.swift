@@ -45,13 +45,29 @@ final class SettingsStore {
         set { defaults.set(newValue, forKey: Key.cleanupEnabled) }
     }
 
+    /// Falls back to the default when the stored id is unknown, not just when
+    /// it's absent: a model dropped from the catalog (or a downgrade) would
+    /// otherwise leave the picker with nothing selected and the stat row
+    /// showing "—", with no way for the user to see why.
     var transcriptionModelID: String {
-        get { defaults.string(forKey: Key.transcriptionModelID) ?? ModelCatalog.defaultTranscriptionID }
+        get {
+            let stored = defaults.string(forKey: Key.transcriptionModelID)
+            guard let stored, ModelCatalog.transcriptionModel(id: stored) != nil else {
+                return ModelCatalog.defaultTranscriptionID
+            }
+            return stored
+        }
         set { defaults.set(newValue, forKey: Key.transcriptionModelID) }
     }
 
     var cleanupModelID: String {
-        get { defaults.string(forKey: Key.cleanupModelID) ?? ModelCatalog.defaultCleanupID }
+        get {
+            let stored = defaults.string(forKey: Key.cleanupModelID)
+            guard let stored, ModelCatalog.cleanupModel(id: stored) != nil else {
+                return ModelCatalog.defaultCleanupID
+            }
+            return stored
+        }
         set { defaults.set(newValue, forKey: Key.cleanupModelID) }
     }
 

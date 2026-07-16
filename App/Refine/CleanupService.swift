@@ -29,6 +29,11 @@ final class CleanupService {
                                   zeroRetention: zeroRetention)
 
         var request = URLRequest(url: endpoint)
+        // Without this the URLSession default (60s) applies: a hung connection
+        // would hold the pipeline in .refining for a full minute, rejecting new
+        // dictations the whole time. Cleanup is a sub-second call in practice;
+        // past this we insert the raw transcript instead of stalling.
+        request.timeoutInterval = 12
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

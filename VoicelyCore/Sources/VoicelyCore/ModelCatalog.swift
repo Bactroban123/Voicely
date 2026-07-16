@@ -19,9 +19,8 @@ public enum ModelCatalog {
         ModelOption(id: "parakeet-en",
                     name: "Parakeet (English)",
                     detail: "Fastest + most accurate for English. Runs on the Neural Engine."),
-        ModelOption(id: "apple-speech",
-                    name: "Apple Dictation (native)",
-                    detail: "No download, shared with macOS. Requires macOS 26+."),
+        // No "Apple Dictation (native)" entry: it had no engine behind it and
+        // silently fell back to Parakeet. Re-add it only with an implementation.
         ModelOption(id: "parakeet-multi",
                     name: "Parakeet (Multilingual)",
                     detail: "Same speed; 25 languages + Japanese."),

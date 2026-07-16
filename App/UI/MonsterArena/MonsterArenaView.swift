@@ -60,6 +60,11 @@ fileprivate final class ArenaEngine: ObservableObject {
 
     func stop() { timer?.invalidate(); timer = nil }
 
+    /// RunLoop.main retains the Timer independently of this object, so without
+    /// this an engine that deallocates without stop() would leave a 60Hz
+    /// wake-up firing for the life of the app.
+    deinit { timer?.invalidate() }
+
     func spawnMonster() {
         guard monsters.count < MAX_MONSTERS else { return }
         let x = CGFloat.random(in: SPRITE_W...(arenaW - SPRITE_W))

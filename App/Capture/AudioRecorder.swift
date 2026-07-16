@@ -15,6 +15,10 @@ enum AudioRecorderError: Error {
     /// (or a device switch is still settling). installTap would throw an
     /// uncatchable NSException with such a format, so we refuse first.
     case noUsableInputDevice
+    /// The mic's native format can't be converted to 16kHz mono (exotic
+    /// device). Previously this was swallowed: every buffer was dropped and
+    /// the take produced silence with no diagnostic anywhere.
+    case unsupportedInputFormat(AVAudioFormat)
 }
 
 final class AudioRecorder {
@@ -118,7 +122,9 @@ final class AudioRecorder {
         // The converter is captured by THIS tap's closure (not a shared stored
         // property): an in-flight callback from an old tap can never race a
         // rebuild's reassignment or feed an old-format buffer to a new converter.
-        let converter = AVAudioConverter(from: inputFormat, to: targetFormat)
+        guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
+            throw AudioRecorderError.unsupportedInputFormat(inputFormat)
+        }
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             self?.process(buffer, with: converter)
         }
@@ -155,8 +161,7 @@ final class AudioRecorder {
         }
     }
 
-    private func process(_ buffer: AVAudioPCMBuffer, with converter: AVAudioConverter?) {
-        guard let converter else { return }
+    private func process(_ buffer: AVAudioPCMBuffer, with converter: AVAudioConverter) {
         let ratio = targetFormat.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1_024
         guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else { return }
