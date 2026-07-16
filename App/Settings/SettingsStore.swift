@@ -20,6 +20,19 @@ final class SettingsStore {
         static let cleanupModeID = "cleanupModeID"
         static let zeroRetention = "zeroRetention"
         static let autoLearnEnabled = "autoLearnEnabled"
+        static let keepMeetingAudio = "keepMeetingAudio"
+    }
+
+    /// Keep a meeting's audio after it's been transcribed.
+    ///
+    /// Off by default: an hour of a call is ~230 MB across both tracks, the
+    /// transcript is what people actually use, and audio of other people is the
+    /// most sensitive thing this app ever writes to disk. Deletion is keyed on
+    /// the transcript existing, never on the summary — re-summarizing doesn't
+    /// need the audio, so there's no gap.
+    var keepMeetingAudio: Bool {
+        get { defaults.object(forKey: Key.keepMeetingAudio) as? Bool ?? false }
+        set { defaults.set(newValue, forKey: Key.keepMeetingAudio) }
     }
 
     /// When on, Voicely learns recurring proper nouns from your dictation and
