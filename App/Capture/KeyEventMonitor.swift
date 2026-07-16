@@ -1,12 +1,15 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import os
 import VoicelyCore
 
 /// Listens to global key events via a CGEventTap and feeds them to the pure
 /// `HotKeyProcessor`. Requires Input Monitoring permission; `start()` returns
 /// false if the tap couldn't be created (i.e. permission not granted yet).
 final class KeyEventMonitor {
+    private static let signposter = OSSignposter(subsystem: "com.voicely.app", category: "tap")
+
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     /// Modifier keys (fn, ⌥, etc.) arrive via flagsChanged with no up/down phase,
@@ -27,7 +30,19 @@ final class KeyEventMonitor {
         let callback: CGEventTapCallBack = { _, type, event, refcon in
             if let refcon = refcon {
                 let monitor = Unmanaged<KeyEventMonitor>.fromOpaque(refcon).takeUnretainedValue()
+                // Canary: a slow tap callback delays keyboard delivery for every
+                // app in the session, and macOS force-disables taps that stall
+                // (~1s). Apple's responsiveness guidance is single-digit ms, so
+                // anything past 8ms is logged as an early warning. The log call
+                // itself is non-blocking (async file mirror).
+                let interval = KeyEventMonitor.signposter.beginInterval("tapCallback")
+                let started = CFAbsoluteTimeGetCurrent()
                 monitor.handle(type: type, event: event)
+                let elapsedMs = (CFAbsoluteTimeGetCurrent() - started) * 1000
+                KeyEventMonitor.signposter.endInterval("tapCallback", interval)
+                if elapsedMs > 8 {
+                    VoicelyLog.hotkey.warning("tap callback took \(Int(elapsedMs))ms (budget 8ms)")
+                }
             }
             return Unmanaged.passUnretained(event)
         }
