@@ -31,6 +31,32 @@ final class MeetingRecoveryTests: XCTestCase {
         XCTAssertEqual(MeetingRecovery.action(for: meeting(.recording, chunks: false)), .offerCleanup)
     }
 
+    /// THE BUG THIS FILE MISSED, and it cost a real recording.
+    ///
+    /// These rules are only correct on a RECONCILED meeting — one whose
+    /// manifest has been rebuilt from the audio folder. The recorder writes
+    /// chunk files continuously but only records their names at a clean stop,
+    /// so a crashed meeting has real audio on disk and an EMPTY manifest.
+    /// `.offerCleanup` then meant "delete", and the crash recovery destroyed
+    /// exactly what it exists to save.
+    ///
+    /// The original test passed because its fixture planted a manifest a crash
+    /// never produces — testing the assumption instead of the reality.
+    func testAnEmptyManifestIsIndistinguishableFromAnEmptyHuskHere() {
+        // Same input, two very different meetings on disk. This type cannot
+        // tell them apart — which is precisely why MeetingStore must reconcile
+        // from the filesystem BEFORE asking, and why pruning re-checks the
+        // filesystem itself rather than trusting any manifest.
+        let crashedWithAudioOnDisk = meeting(.recording, chunks: false)
+        XCTAssertEqual(MeetingRecovery.action(for: crashedWithAudioOnDisk), .offerCleanup)
+
+        // Reconciled (manifest rebuilt from the audio folder), the same meeting
+        // is correctly recoverable.
+        let reconciled = meeting(.recording, chunks: true)
+        XCTAssertEqual(MeetingRecovery.action(for: reconciled), .offerInterrupted)
+        XCTAssertFalse(MeetingRecovery.isDisposable(reconciled))
+    }
+
     func testDiedMidTranscriptionJustDoesItAgain() {
         // Transcription is idempotent and costs minutes; the audio is still
         // there, so there's nothing to ask about.

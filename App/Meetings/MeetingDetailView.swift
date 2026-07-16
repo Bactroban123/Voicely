@@ -105,8 +105,12 @@ struct MeetingDetailView: View {
                 case .offerCleanup, .none:
                     EmptyView()
                 }
+                // Through the controller, never straight to the store: the
+                // session has to learn the meeting is gone, or its
+                // "finish the unfinished one first" guard blocks every new
+                // recording forever.
                 Button("Discard") {
-                    MeetingStore.shared.delete(meeting.id)
+                    Self.controller?.discard(meeting)
                     onChanged()
                 }
                 .font(.system(size: 11))
