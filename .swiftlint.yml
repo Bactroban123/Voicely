@@ -1,0 +1,22 @@
+# Minimal, focused rule set for PR2 of the stabilization program.
+#
+# unused_import is intentionally omitted: `swiftlint rules` shows it requires
+# analyzer mode (a compilation database via `swiftlint analyze`), which needs
+# a full build log rather than a plain `swiftlint lint` pass. Revisit if CI
+# grows a `swiftlint analyze` step.
+only_rules:
+  - force_unwrapping
+  - force_try
+  - force_cast
+  - unused_closure_parameter
+
+excluded:
+  - windows
+  - .build-xcode
+  - VoicelyCore/.build
+  - site
+
+included:
+  - App
+  - VoicelyCore/Sources
+  - VoicelyCore/Tests

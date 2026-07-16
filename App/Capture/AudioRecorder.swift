@@ -7,12 +7,22 @@ import Foundation
 final class AudioRecorder {
     private let engine = AVAudioEngine()
     private var converter: AVAudioConverter?
-    private let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
-                                             sampleRate: 16_000,
-                                             channels: 1,
-                                             interleaved: false)!
+    private let targetFormat = AudioRecorder.makeTargetFormat()
     private var samples: [Float] = []
     private let lock = NSLock()
+
+    /// The 16kHz mono Float32 format the transcription engines expect. These
+    /// parameters are fixed and valid, so this cannot fail in practice; the
+    /// guard exists only to give a diagnosable crash instead of a bare `!`.
+    private static func makeTargetFormat() -> AVAudioFormat {
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32,
+                                          sampleRate: 16_000,
+                                          channels: 1,
+                                          interleaved: false) else {
+            fatalError("Voicely: failed to construct the 16kHz mono target format")
+        }
+        return format
+    }
 
     /// Called on the main queue with the latest RMS level (0...~1).
     var onLevel: ((Float) -> Void)?
