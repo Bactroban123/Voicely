@@ -19,7 +19,7 @@ network coupling. The Xcode app imports this package and wires it to the OS.
 ## Verify
 
 ```bash
-swift test   # from this directory — runs the XCTest suite: 70 tests, 0 failures
+swift test   # from this directory — runs the XCTest suite
 ```
 
 The XCTest suite under `Tests/` is the canonical (and only) test suite.

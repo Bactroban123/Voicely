@@ -5,7 +5,7 @@
 | Layer | Status |
 |---|---|
 | Research / Spec / Plan / Design | ✅ `docs/`, `PRODUCT.md`, `DESIGN.md` |
-| VoicelyCore (pure logic) | ✅ `swift test` — 70 tests, 0 failures |
+| VoicelyCore (pure logic) | ✅ `swift test` — 118 tests, 0 failures |
 | Phase 0 scaffold (menu-bar app) | ✅ builds |
 | Phase 1 hotkey + mic + permissions | ✅ builds |
 | Phase 2+3 on-device transcription + paste | ✅ builds |
@@ -19,7 +19,7 @@ Xcode 26.5 is installed and active; `xcodebuild` and `swift test` work.
 ## Build / install / test
 
 ```bash
-cd VoicelyCore && swift test          # pure-logic suite (70 tests)
+cd VoicelyCore && swift test          # pure-logic suite
 ./scripts/install.sh                   # build + ad-hoc sign + install to /Applications
 open /Applications/Voicely.app         # launch (menu-bar icon appears)
 ```

@@ -30,7 +30,7 @@ Everything achievable autonomously this session is done and committed.
 | **Marketing / sales landing page** (`site/index.html`, icy, EN⇄HE demo, 3-tier pricing) | Built | Rendered in browser, 0 console errors |
 | **macOS DMG installer** (`scripts/make-dmg.sh` → `dist/Voicely.dmg`) | Built | drag-to-Applications DMG |
 | **Master strategy + 6 research reports** | Done | `docs/plans/` + `docs/research/` |
-| **VoicelyCore** pure-logic suite | 70 tests green | `swift test` |
+| **VoicelyCore** pure-logic suite | 118 tests green | `swift test` |
 
 **The app right now:** menu-bar icon → hold/tap your hotkey → speak EN or HE →
 clean text (or translation, or a prompt) lands at your cursor. Switch modes from

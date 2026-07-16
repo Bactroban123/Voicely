@@ -28,7 +28,7 @@ See **[docs/STATUS.md](docs/STATUS.md)** for the honest what's-done / what's-nex
 ./scripts/install.sh                 # build + sign + install to /Applications
 open /Applications/Voicely.app
 ./scripts/make-dmg.sh                # → dist/Voicely.dmg (installer)
-cd VoicelyCore && swift test         # pure-logic tests (70 tests)
+cd VoicelyCore && swift test         # pure-logic tests
 ```
 
 macOS 14+ · Apple Silicon · requires Microphone, Accessibility, Input Monitoring.
