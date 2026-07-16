@@ -5,6 +5,9 @@ import SwiftUI
 /// tail, with one-click "Copy Diagnostics" for bug reports. Everything is
 /// read locally; nothing is ever transmitted.
 struct DiagnosticsPage: View {
+    /// Live counters from the running controller (AppDelegate injects it).
+    static weak var controller: RecordingController?
+
     @State private var micGranted = false
     @State private var accessibilityGranted = false
     @State private var inputMonitoringGranted = false
@@ -48,6 +51,16 @@ struct DiagnosticsPage: View {
             VStack(alignment: .leading, spacing: 6) {
                 row("App version", appVersion)
                 row("macOS", ProcessInfo.processInfo.operatingSystemVersionString)
+                HStack {
+                    label("Hotkey tap")
+                    Spacer()
+                    let recoveries = Self.controller?.tapRecoveries ?? 0
+                    if recoveries == 0 {
+                        badge("healthy", ok: true)
+                    } else {
+                        badge("recovered \(recoveries)×", ok: false)
+                    }
+                }
                 HStack {
                     label("Previous session")
                     Spacer()
@@ -163,6 +176,7 @@ struct DiagnosticsPage: View {
         Voicely diagnostics — \(Date())
         App: \(appVersion)  ·  macOS \(ProcessInfo.processInfo.operatingSystemVersionString)
         Permissions: mic=\(micGranted) accessibility=\(accessibilityGranted) inputMonitoring=\(inputMonitoringGranted)
+        Hotkey tap recoveries: \(Self.controller?.tapRecoveries ?? 0)
         Transcription model: \(settings.transcriptionModelID)
         Cleanup: enabled=\(settings.cleanupEnabled) model=\(settings.cleanupModelID) mode=\(settings.cleanupModeID)
         Previous session: \(CrashReporter.shared.lastRunEndedCleanly.map { $0 ? "clean exit" : "didn't exit cleanly" } ?? "unknown")

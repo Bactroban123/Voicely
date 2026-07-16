@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         controller.onLevel = { [weak self] level in self?.hud.update(level: level) }
         controller.onNotice = { [weak self] text in self?.flashHUD(text) }
+        DiagnosticsPage.controller = controller
 
         // Existing users (already have a key) skip onboarding; only fresh installs see it.
         let onboarded = SettingsStore.shared.hasOnboarded

@@ -8,6 +8,9 @@ import VoicelyCore
 final class TextInserter {
     /// Restore delay must outlast the paste landing in the target app.
     private let restoreDelay: TimeInterval = 0.25
+    /// The pending clipboard restore, cancellable so a rapid second dictation
+    /// doesn't get clobbered by the previous take's stale restore.
+    private var pendingRestore: DispatchWorkItem?
 
     @discardableResult
     func insert(_ text: String, axFirst: Bool = false) -> InsertOutcome {
@@ -37,16 +40,26 @@ final class TextInserter {
         let previous = pb.string(forType: .string)
         pb.clearContents()
         pb.setString(text, forType: .string)
+        let ourChangeCount = pb.changeCount // captured after our own write
 
         guard postCommandV() else {
             // Leave our text on the clipboard (copy-only) if we couldn't paste.
             return false
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + restoreDelay) {
+        // A newer dictation's restore supersedes this one; without cancelling,
+        // this stale restore would overwrite the newer take's clipboard.
+        pendingRestore?.cancel()
+        let restore = DispatchWorkItem {
+            // changeCount only moves on a WRITE (pasting doesn't bump it), so
+            // an unequal count means someone else owns the clipboard now —
+            // leave it alone rather than stomping the user's own copy.
+            guard pb.changeCount == ourChangeCount else { return }
             pb.clearContents()
             if let previous { pb.setString(previous, forType: .string) }
         }
+        pendingRestore = restore
+        DispatchQueue.main.asyncAfter(deadline: .now() + restoreDelay, execute: restore)
         return true
     }
 
