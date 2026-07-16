@@ -2,6 +2,17 @@
 Pure, cross-platform logic for Voicely (Windows) — no audio, keyboard, tray or GUI
 imports, so it runs (and is unit-tested) on any OS, including the macOS dev box and
 the Windows CI runner. main.py owns the platform I/O and calls into here.
+
+NOT SHIPPED, AND HERE'S WHY: unlike the Mac app, this transcribes in the CLOUD —
+`transcribe()` below POSTs your raw microphone audio to OpenRouter. Voicely's
+central claim is the opposite ("your audio never leaves"), so shipping this under
+the Voicely name made that claim untrue for anyone who installed it. It went out
+on the v0.2.0 release by mistake and was pulled on 2026-07-16; the build workflow
+is now manual-only and publishes nothing.
+
+Before this can ship it needs on-device transcription (whisper.cpp /
+faster-whisper, or the Tauri + Rust rewrite in platforms/README.md). Until then,
+don't restore the release step.
 """
 
 from __future__ import annotations
