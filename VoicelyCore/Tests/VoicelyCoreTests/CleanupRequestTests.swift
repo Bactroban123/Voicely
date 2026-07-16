@@ -38,15 +38,15 @@ final class CleanupRequestTests: XCTestCase {
         XCTAssertEqual(obj["max_tokens"] as? Int, 400)
     }
 
-    func testLongTranscriptGetsABudgetThatCannotTruncateIt() throws {
-        // ~2,000 words: the old fixed 400-token cap would have cut the cleaned
-        // output off mid-sentence, and the API returns 200 for that.
+    func testLongTranscriptGetsFarMoreRoomThanTheOldFixedCap() throws {
+        // ~2,000 words: the old fixed 400-token cap cut the cleaned output off
+        // mid-sentence, and the API returns 200 for that — so it pasted as if
+        // complete. The budget must now leave real headroom over a realistic
+        // token count for the input (~4 chars/token in English).
         let long = String(repeating: "word ", count: 2_000)
         let obj = try json(CleanupRequest(modelID: "m", systemPrompt: "s", transcript: long))
         let budget = try XCTUnwrap(obj["max_tokens"] as? Int)
         XCTAssertGreaterThan(budget, 400)
-        // Must comfortably exceed a realistic token count for the input
-        // (~4 chars/token in English) so a rewrite of it always fits.
         XCTAssertGreaterThan(budget, long.count / 4)
     }
 
@@ -56,9 +56,13 @@ final class CleanupRequestTests: XCTestCase {
         XCTAssertGreaterThan(long, short)
     }
 
-    func testBudgetIsCappedSoAPathologicalTranscriptCannotRunUpTheBill() {
-        let huge = String(repeating: "a", count: 500_000)
-        XCTAssertEqual(CleanupRequest.maxTokens(forTranscript: huge), 4_096)
+    /// Past the ceiling the budget deliberately stops tracking the input — a
+    /// bigger `max_tokens` shrinks OpenRouter's provider pool. Output can then
+    /// truncate, which is exactly why the call site checks `finish_reason` and
+    /// falls back to the raw transcript rather than pasting a fragment.
+    func testBudgetStopsAtTheCeilingThatKeepsTheProviderPoolOpen() {
+        XCTAssertEqual(CleanupRequest.maxTokens(forTranscript: String(repeating: "a", count: 20_000)), 4_096)
+        XCTAssertEqual(CleanupRequest.maxTokens(forTranscript: String(repeating: "a", count: 500_000)), 4_096)
     }
 
     func testExplicitBudgetStillWins() throws {
