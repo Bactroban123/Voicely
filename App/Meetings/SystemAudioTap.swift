@@ -18,13 +18,24 @@ import Foundation
 /// "Me" vs "Them" attribution for free, with no diarization.
 @available(macOS 14.2, *)
 final class SystemAudioTap {
-    enum TapError: Error {
+    enum TapError: Error, CustomStringConvertible {
         /// Tap creation refused — on macOS 14.4+ this is where a missing
         /// audio-capture TCC grant surfaces.
         case tapRefused(OSStatus)
         case aggregateDeviceFailed(OSStatus)
         case ioProcFailed(OSStatus)
         case tapFormatUnavailable
+        case alreadyRunning
+
+        var description: String {
+            switch self {
+            case .tapRefused(let s): return "system audio tap refused (status \(s)) — audio-capture permission?"
+            case .aggregateDeviceFailed(let s): return "aggregate device creation failed (status \(s))"
+            case .ioProcFailed(let s): return "audio IO proc failed (status \(s))"
+            case .tapFormatUnavailable: return "the tap reported no usable format"
+            case .alreadyRunning: return "the tap is already running"
+            }
+        }
     }
 
     /// Called on Core Audio's real-time IO thread. Do no allocation, no locks,
@@ -42,7 +53,12 @@ final class SystemAudioTap {
 
     /// Begins capture. `onSamples` fires on the audio IO thread with interleaved
     /// Float32 in `format`.
+    ///
+    /// Refuses to start twice: a second start would overwrite `tapID`/
+    /// `aggregateID`/`ioProcID` and strand the previous tap, aggregate device
+    /// and a *running* IOProc until the process exits.
     func start(onSamples: @escaping SampleHandler) throws {
+        guard !running else { throw TapError.alreadyRunning }
         // Exclude nothing: Voicely plays no audio, so there's no risk of taping
         // ourselves. (Note the exclusion list takes Core Audio *process object*
         // IDs, not PIDs — if Voicely ever gains a start/stop chime, translate
@@ -117,6 +133,7 @@ final class SystemAudioTap {
         }
         ioProcID = nil
         running = false
+        format = nil            // don't leave a stale format visible to a restart
         destroyAggregate()
         destroyTap()
     }

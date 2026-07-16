@@ -5,14 +5,13 @@ import Foundation
 /// system output mixdown ("Them") — straight to disk.
 ///
 /// Two tracks rather than one mixed stream is the whole trick: because the tap
-/// captures playback and the mic captures input, the speaker attribution falls
-/// out of *which file a sample landed in*. No diarization model, no clustering,
-/// no guessing.
+/// captures playback and the mic captures input, speaker attribution falls out
+/// of *which file a sample landed in*. No diarization model, no clustering.
 ///
-/// Nothing is buffered in memory beyond one AVAudioPCMBuffer at a time: a
-/// two-hour meeting must cost the same RAM as a two-minute one. Both tracks are
-/// written as 16 kHz mono Int16 CAF chunks — 16 kHz because that's what the ASR
-/// engines consume anyway, Int16 because speech doesn't need Float32's range
+/// Nothing is buffered in memory beyond a bounded ring: a two-hour meeting must
+/// cost the same RAM as a two-minute one, even if the disk stalls. Both tracks
+/// are written as 16 kHz mono Int16 CAF chunks — 16 kHz because that's what the
+/// ASR engines consume anyway, Int16 because speech doesn't need Float32's range
 /// (it halves the bytes), and CAF/PCM because it stays valid if the process is
 /// killed mid-write, unlike AAC whose index lands at close.
 ///
@@ -21,58 +20,99 @@ import Foundation
 /// while the user dictates.
 @available(macOS 14.2, *)
 final class MeetingRecorder {
-    enum RecorderError: Error {
+    enum RecorderError: Error, CustomStringConvertible {
         case micUnavailable
         case noUsableInputFormat
+        case alreadyRecording
+
+        var description: String {
+            switch self {
+            case .micUnavailable: return "couldn't build a converter for the microphone format"
+            case .noUsableInputFormat: return "no usable microphone input device"
+            case .alreadyRecording: return "a meeting is already recording"
+            }
+        }
     }
 
-    /// One track's on-disk chunk sequence.
-    struct Track {
-        let name: String            // "mic" | "system"
+    /// What `start` achieved. A tap failure must not abort a live meeting — but
+    /// mic-only is, by this feature's own reasoning, the useless product that
+    /// got the previous attempt deleted, so the caller is told rather than left
+    /// to discover it after the call.
+    enum StartOutcome: Equatable {
+        case bothTracks
+        case micOnly(reason: String)
+    }
+
+    private struct Track {
+        let name: String
         var chunkIndex = 0
         var file: AVAudioFile?
         var framesInChunk: AVAudioFrameCount = 0
+        var started = false
     }
 
     /// Rotate every 5 minutes: bounds worst-case loss on a hard kill to one
-    /// chunk, and keeps each file independently decodable.
+    /// chunk (~9.6MB), and keeps each file independently decodable.
     private let framesPerChunk: AVAudioFrameCount = 16_000 * 60 * 5
+    /// How often the ring is drained to disk.
+    private let drainInterval: TimeInterval = 0.25
 
     private let queue = DispatchQueue(label: "com.voicely.meeting.recorder", qos: .userInitiated)
     private let directory: URL
     private let engine = AVAudioEngine()
     private let tap = SystemAudioTap()
+    private let systemRing = SampleRing()
+    private var drainTimer: DispatchSourceTimer?
+    private var scratch: UnsafeMutablePointer<Float>?
+    private let scratchCapacity = 48_000
+
     private lazy var targetFormat: AVAudioFormat = {
-        guard let f = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000,
-                                    channels: 1, interleaved: true) else {
+        guard let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000,
+                                         channels: 1, interleaved: true) else {
             fatalError("Voicely: failed to build the 16kHz mono meeting format")
         }
-        return f
+        return format
     }()
 
     private var micTrack = Track(name: "mic")
     private var systemTrack = Track(name: "system")
     private var systemConverter: AVAudioConverter?
+    private var tapFormat: AVAudioFormat?
     private var isRecording = false
+    private var configObserver: NSObjectProtocol?
 
     init(directory: URL) {
         self.directory = directory
     }
 
-    /// Starts both tracks. Throws if the mic can't start; a tap failure is
-    /// reported but does NOT abort — a mic-only recording is degraded (it's
-    /// what the abandoned prototype was) but still better than nothing, and the
-    /// caller surfaces it.
-    func start(completion: @escaping (Result<Void, Error>) -> Void) {
+    deinit {
+        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
+        scratch?.deallocate()
+    }
+
+    /// Starts both tracks. Throws only if the microphone can't start — a tap
+    /// failure yields `.micOnly` with the reason, which the caller must surface.
+    func start(completion: @escaping (Result<StartOutcome, Error>) -> Void) {
         queue.async { [self] in
+            guard !isRecording else { return completion(.failure(RecorderError.alreadyRecording)) }
             do {
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                // Fresh chunk numbering per recording. Reset here rather than in
+                // teardown, because stop() reports the chunk list after tearing
+                // down — and without a reset, a second recording would reopen
+                // the last chunk and truncate the previous meeting's audio.
+                micTrack = Track(name: "mic")
+                systemTrack = Track(name: "system")
                 try startMic()
-                startSystem()   // best-effort
+                let outcome = startSystem()
                 isRecording = true
-                completion(.success(()))
+                observeConfigurationChanges()
+                startDraining()
+                VoicelyLog.meeting.info("meeting recording started — \(outcome == .bothTracks ? "mic + system audio" : "MIC ONLY")")
+                completion(.success(outcome))
             } catch {
                 teardown()
+                VoicelyLog.meeting.error("meeting recording failed to start — \(error)")
                 completion(.failure(error))
             }
         }
@@ -82,16 +122,20 @@ final class MeetingRecorder {
     /// the chunk files written, in order, per track.
     func stop(completion: @escaping (_ mic: [URL], _ system: [URL]) -> Void) {
         queue.async { [self] in
+            let wasRecording = isRecording
+            drainRing()          // flush whatever the ring still holds
             teardown()
             let mic = chunkURLs(for: micTrack)
             let system = chunkURLs(for: systemTrack)
-            VoicelyLog.meeting.info("meeting stopped — \(mic.count) mic chunk(s), \(system.count) system chunk(s)")
+            if wasRecording {
+                let dropped = systemRing.dropped
+                VoicelyLog.meeting.info(
+                    "meeting stopped — \(mic.count) mic chunk(s), \(system.count) system chunk(s)"
+                        + (dropped > 0 ? ", \(dropped) samples dropped (disk couldn't keep up)" : ""))
+            }
             completion(mic, system)
         }
     }
-
-    /// True when the system tap is live; false means mic-only (degraded).
-    private(set) var capturingSystemAudio = false
 
     // MARK: - Queue-confined internals
 
@@ -104,49 +148,76 @@ final class MeetingRecorder {
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
             throw RecorderError.micUnavailable
         }
+        // AVAudioEngine's tap thread is not the audio IO thread and may allocate,
+        // so hopping straight to `queue` is fine here (unlike the tap's IOProc).
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-            self?.queue.async { self?.write(buffer, through: converter, to: \.micTrack) }
+            guard let self else { return }
+            self.queue.async { self.convertAndWrite(buffer, through: converter, toMic: true) }
         }
         engine.prepare()
         do {
             try engine.start()
         } catch {
-            input.removeTap(onBus: 0)
+            input.removeTap(onBus: 0)   // never strand the tap on a failed start
             throw error
         }
+        micTrack.started = true
     }
 
-    private func startSystem() {
-        guard let tapFormat = try? startTapAndFormat() else { return }
-        systemConverter = AVAudioConverter(from: tapFormat, to: targetFormat)
-        capturingSystemAudio = systemConverter != nil
-        if !capturingSystemAudio {
-            VoicelyLog.meeting.error("no converter for the tap format — recording mic only")
-            tap.stop()
+    /// Best-effort. Never throws: a meeting with only your own voice is degraded,
+    /// not worthless, and aborting mid-call would be worse.
+    private func startSystem() -> StartOutcome {
+        do {
+            try tap.start { [ring = systemRing] samples, count in
+                // REAL-TIME THREAD. memcpy + index publish only: no allocation,
+                // no ARC, no locks, no dispatch.
+                ring.write(samples, count: count)
+            }
+            guard let format = tap.format,
+                  let converter = AVAudioConverter(from: format, to: targetFormat) else {
+                tap.stop()
+                let reason = "no converter for the tap's format"
+                VoicelyLog.meeting.error("system audio unavailable — \(reason)")
+                return .micOnly(reason: reason)
+            }
+            tapFormat = format
+            systemConverter = converter
+            systemTrack.started = true
+            return .bothTracks
+        } catch {
+            // The TCC-denial path lands here. It must never be swallowed.
+            let reason = String(describing: error)
+            VoicelyLog.meeting.error("system audio unavailable — \(reason)")
+            return .micOnly(reason: reason)
         }
     }
 
-    private func startTapAndFormat() throws -> AVAudioFormat {
-        try tap.start { [weak self] samples, count in
-            // Real-time thread: copy out and hand off immediately.
-            guard let self, let format = self.tap.format,
-                  let buffer = AVAudioPCMBuffer(pcmFormat: format,
+    private func startDraining() {
+        if scratch == nil {
+            scratch = UnsafeMutablePointer<Float>.allocate(capacity: scratchCapacity)
+        }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + drainInterval, repeating: drainInterval)
+        timer.setEventHandler { [weak self] in self?.drainRing() }
+        timer.resume()
+        drainTimer = timer
+    }
+
+    /// Moves samples the RT thread parked in the ring onto disk.
+    private func drainRing() {
+        guard let scratch, let tapFormat, let converter = systemConverter else { return }
+        while true {
+            let count = systemRing.read(into: scratch, max: scratchCapacity)
+            guard count > 0 else { return }
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: tapFormat,
                                                 frameCapacity: AVAudioFrameCount(count)) else { return }
-            buffer.frameLength = AVAudioFrameCount(count) / format.channelCount
-            if let dst = buffer.floatChannelData?[0] {
-                dst.update(from: samples, count: count)
-            }
-            self.queue.async {
-                guard let converter = self.systemConverter else { return }
-                self.write(buffer, through: converter, to: \.systemTrack)
-            }
+            buffer.frameLength = AVAudioFrameCount(count)
+            buffer.floatChannelData?[0].update(from: scratch, count: count)
+            convertAndWrite(buffer, through: converter, toMic: false)
         }
-        guard let format = tap.format else { throw SystemAudioTap.TapError.tapFormatUnavailable }
-        return format
     }
 
-    private func write(_ buffer: AVAudioPCMBuffer, through converter: AVAudioConverter,
-                       to keyPath: ReferenceWritableKeyPath<MeetingRecorder, Track>) {
+    private func convertAndWrite(_ buffer: AVAudioPCMBuffer, through converter: AVAudioConverter, toMic: Bool) {
         guard isRecording else { return }
         let ratio = targetFormat.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1_024
@@ -161,44 +232,89 @@ final class MeetingRecorder {
             return buffer
         }
         guard status != .error, out.frameLength > 0 else { return }
+        write(out, toMic: toMic)
+    }
 
-        if self[keyPath: keyPath].file == nil { openChunk(keyPath) }
-        if self[keyPath: keyPath].framesInChunk + out.frameLength > framesPerChunk {
-            openChunk(keyPath)   // rotate
+    private func write(_ buffer: AVAudioPCMBuffer, toMic: Bool) {
+        var track = toMic ? micTrack : systemTrack
+        defer { if toMic { micTrack = track } else { systemTrack = track } }
+
+        let needsRotation = track.file != nil && track.framesInChunk + buffer.frameLength > framesPerChunk
+        if track.file == nil || needsRotation {
+            guard openChunk(&track, advance: needsRotation) else { return }
         }
         do {
-            try self[keyPath: keyPath].file?.write(from: out)
-            self[keyPath: keyPath].framesInChunk += out.frameLength
+            try track.file?.write(from: buffer)
+            track.framesInChunk += buffer.frameLength
         } catch {
-            VoicelyLog.meeting.error("chunk write failed on \(self[keyPath: keyPath].name) — \(error)")
+            VoicelyLog.meeting.error("chunk write failed on \(track.name) — \(error)")
         }
     }
 
-    private func openChunk(_ keyPath: ReferenceWritableKeyPath<MeetingRecorder, Track>) {
-        let track = self[keyPath: keyPath]
-        let index = track.file == nil ? track.chunkIndex : track.chunkIndex + 1
+    /// Opens the next chunk. Returns false if it couldn't — and drops the stale
+    /// file so a failure can't leave the previous chunk growing past its cap
+    /// while every subsequent buffer retries and log-spams.
+    private func openChunk(_ track: inout Track, advance: Bool) -> Bool {
+        let index = advance ? track.chunkIndex + 1 : track.chunkIndex
         let url = chunkURL(name: track.name, index: index)
         do {
-            let file = try AVAudioFile(forWriting: url, settings: targetFormat.settings,
-                                       commonFormat: .pcmFormatInt16, interleaved: true)
-            self[keyPath: keyPath].file = file
-            self[keyPath: keyPath].chunkIndex = index
-            self[keyPath: keyPath].framesInChunk = 0
+            track.file = try AVAudioFile(forWriting: url, settings: targetFormat.settings,
+                                         commonFormat: .pcmFormatInt16, interleaved: true)
+            track.chunkIndex = index
+            track.framesInChunk = 0
+            return true
         } catch {
+            track.file = nil
+            track.framesInChunk = 0
             VoicelyLog.meeting.error("couldn't open chunk \(url.lastPathComponent) — \(error)")
+            return false
+        }
+    }
+
+    /// A device switch (AirPods connecting) resets the engine; without this the
+    /// mic track goes silent for the rest of the meeting.
+    private func observeConfigurationChanges() {
+        guard configObserver == nil else { return }
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.queue.async {
+                guard self.isRecording else { return }
+                VoicelyLog.meeting.warning("audio device changed mid-meeting — rebuilding the mic track")
+                self.engine.inputNode.removeTap(onBus: 0)
+                self.engine.stop()
+                do {
+                    try self.startMic()   // continues into the SAME chunk; a brief gap at the switch
+                } catch {
+                    VoicelyLog.meeting.error("mic track lost after a device change — \(error)")
+                }
+            }
         }
     }
 
     private func teardown() {
-        guard isRecording || engine.isRunning else { return }
-        isRecording = false
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        drainTimer?.cancel()
+        drainTimer = nil
+        if let configObserver {
+            NotificationCenter.default.removeObserver(configObserver)
+            self.configObserver = nil
+        }
+        if micTrack.started || engine.isRunning {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
         tap.stop()
-        capturingSystemAudio = false
-        micTrack.file = nil        // closing the AVAudioFile flushes its header
-        systemTrack.file = nil
+        isRecording = false
         systemConverter = nil
+        tapFormat = nil
+        // Dropping the last reference to the AVAudioFile flushes its header.
+        // The chunk indices deliberately survive so stop() can still report
+        // what was written; start() resets them for the next recording.
+        micTrack.file = nil
+        micTrack.started = false
+        systemTrack.file = nil
+        systemTrack.started = false
     }
 
     private func chunkURL(name: String, index: Int) -> URL {
@@ -206,9 +322,7 @@ final class MeetingRecorder {
     }
 
     private func chunkURLs(for track: Track) -> [URL] {
-        guard track.chunkIndex >= 0, FileManager.default.fileExists(atPath: chunkURL(name: track.name, index: 0).path)
-        else { return [] }
-        return (0...track.chunkIndex)
+        (0...max(track.chunkIndex, 0))
             .map { chunkURL(name: track.name, index: $0) }
             .filter { FileManager.default.fileExists(atPath: $0.path) }
     }
