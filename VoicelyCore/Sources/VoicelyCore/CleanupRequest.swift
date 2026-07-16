@@ -26,11 +26,26 @@ public struct CleanupRequest: Codable, Equatable {
     public let reasoning: Reasoning
     public let provider: Provider
 
+    /// Token budget for the cleaned output, sized from the transcript.
+    ///
+    /// A fixed cap silently truncates long dictations: the model stops
+    /// mid-sentence, the API still returns 200, and the half-sentence gets
+    /// pasted as if it were correct. Cleanup rewrites rather than expands, but
+    /// translation can inflate token counts (Hebrew and Thai tokenize far more
+    /// densely than English), so budget from the input with real headroom.
+    /// The ceiling bounds a runaway bill on a pathological transcript;
+    /// `finish_reason` is checked at the call site as the actual safety net.
+    public static func maxTokens(forTranscript transcript: String) -> Int {
+        let estimatedInputTokens = max(1, transcript.count / 2) // conservative: English is ~4 chars/token
+        return min(4096, max(400, estimatedInputTokens * 2 + 256))
+    }
+
+    /// `maxTokens: nil` sizes the budget from the transcript (recommended).
     public init(modelID: String,
                 systemPrompt: String,
                 transcript: String,
                 temperature: Double = 0.1,
-                maxTokens: Int = 400,
+                maxTokens: Int? = nil,
                 stream: Bool = true,
                 zeroRetention: Bool = true) {
         self.model = modelID
@@ -39,7 +54,7 @@ public struct CleanupRequest: Codable, Equatable {
             Message(role: "user", content: transcript),
         ]
         self.temperature = temperature
-        self.max_tokens = maxTokens
+        self.max_tokens = maxTokens ?? Self.maxTokens(forTranscript: transcript)
         self.stream = stream
         self.reasoning = Reasoning(enabled: false)
         self.provider = Provider(sort: "latency",

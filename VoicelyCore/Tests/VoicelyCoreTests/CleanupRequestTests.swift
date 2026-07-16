@@ -31,6 +31,41 @@ final class CleanupRequestTests: XCTestCase {
         XCTAssertEqual(provider["zdr"] as? Bool, true)
     }
 
+    // MARK: - Token budget
+
+    func testShortTranscriptKeepsTheFloor() throws {
+        let obj = try json(CleanupRequest(modelID: "m", systemPrompt: "s", transcript: "hello there"))
+        XCTAssertEqual(obj["max_tokens"] as? Int, 400)
+    }
+
+    func testLongTranscriptGetsABudgetThatCannotTruncateIt() throws {
+        // ~2,000 words: the old fixed 400-token cap would have cut the cleaned
+        // output off mid-sentence, and the API returns 200 for that.
+        let long = String(repeating: "word ", count: 2_000)
+        let obj = try json(CleanupRequest(modelID: "m", systemPrompt: "s", transcript: long))
+        let budget = try XCTUnwrap(obj["max_tokens"] as? Int)
+        XCTAssertGreaterThan(budget, 400)
+        // Must comfortably exceed a realistic token count for the input
+        // (~4 chars/token in English) so a rewrite of it always fits.
+        XCTAssertGreaterThan(budget, long.count / 4)
+    }
+
+    func testBudgetGrowsWithInput() {
+        let short = CleanupRequest.maxTokens(forTranscript: String(repeating: "a", count: 500))
+        let long = CleanupRequest.maxTokens(forTranscript: String(repeating: "a", count: 5_000))
+        XCTAssertGreaterThan(long, short)
+    }
+
+    func testBudgetIsCappedSoAPathologicalTranscriptCannotRunUpTheBill() {
+        let huge = String(repeating: "a", count: 500_000)
+        XCTAssertEqual(CleanupRequest.maxTokens(forTranscript: huge), 4_096)
+    }
+
+    func testExplicitBudgetStillWins() throws {
+        let obj = try json(CleanupRequest(modelID: "m", systemPrompt: "s", transcript: "t", maxTokens: 99))
+        XCTAssertEqual(obj["max_tokens"] as? Int, 99)
+    }
+
     func testZeroRetentionCanBeRelaxed() throws {
         let obj = try json(CleanupRequest(modelID: "m", systemPrompt: "s", transcript: "t", zeroRetention: false))
         let provider = try XCTUnwrap(obj["provider"] as? [String: Any])

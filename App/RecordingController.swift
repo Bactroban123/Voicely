@@ -243,7 +243,13 @@ final class RecordingController {
 
     private func performInsert(_ text: String, token: DictationSession.Token) {
         if !text.isEmpty {
-            inserter.insert(text)
+            let outcome = inserter.insert(text)
+            if outcome == .copiedOnly {
+                // Couldn't synthesize the paste (secure input, e.g. Terminal's
+                // Secure Keyboard Entry). The text is on the clipboard — say so
+                // rather than let the dictation look like it vanished.
+                onNotice?("Couldn't paste here — press ⌘V to insert")
+            }
             HistoryStore.shared.record(text)
             if settings.autoLearnEnabled {
                 // Learn recurring proper nouns from history so cleanup spells them
