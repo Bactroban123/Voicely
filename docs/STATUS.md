@@ -22,7 +22,7 @@ Everything achievable autonomously this session is done and committed.
 |---|---|---|
 | **On-device dictation** (hotkey → transcribe → AI clean → insert) | Working, you use it daily | You confirmed "works great" |
 | **EN + Hebrew transcription** (Whisper auto-detect) | Working | Verified on your Mac |
-| **EN ⇄ HE translation** (Translate → English / Hebrew modes) | Built, live in the mode switcher | `xcodebuild` + 92 core checks |
+| **EN ⇄ HE translation** (Translate → English / Hebrew modes) | Built, live in the mode switcher | `xcodebuild` + `swift test` |
 | **AI cleanup presets** (Clean / Polish / Prompt) | Working | Verified |
 | **Snippets** + **custom vocabulary** (27 terms, 4 snippets from your data) | Working | Loaded + verified |
 | **Frostpane icy redesign** (frosted HUD, breathing cyan orb, cyan menu icon) | Built | `xcodebuild` SUCCEEDED |
@@ -30,7 +30,7 @@ Everything achievable autonomously this session is done and committed.
 | **Marketing / sales landing page** (`site/index.html`, icy, EN⇄HE demo, 3-tier pricing) | Built | Rendered in browser, 0 console errors |
 | **macOS DMG installer** (`scripts/make-dmg.sh` → `dist/Voicely.dmg`) | Built | drag-to-Applications DMG |
 | **Master strategy + 6 research reports** | Done | `docs/plans/` + `docs/research/` |
-| **VoicelyCore** pure-logic suite | 92 checks green | `swift test` / `verify.sh` |
+| **VoicelyCore** pure-logic suite | 70 tests green | `swift test` |
 
 **The app right now:** menu-bar icon → hold/tap your hotkey → speak EN or HE →
 clean text (or translation, or a prompt) lands at your cursor. Switch modes from
@@ -96,7 +96,7 @@ open /Applications/Voicely.app
 python3 -m http.server 4321 --directory site   # then open localhost:4321
 
 # the core tests
-cd VoicelyCore && swift test         # (or ./scripts/verify.sh without Xcode)
+cd VoicelyCore && swift test
 ```
 
 **The plan:** [`docs/plans/2026-06-21-voicely-master-strategy.md`](plans/2026-06-21-voicely-master-strategy.md) is the full commercial roadmap. Research backing it is in [`docs/research/`](research/).

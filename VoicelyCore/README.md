@@ -19,13 +19,7 @@ network coupling. The Xcode app imports this package and wires it to the OS.
 ## Verify
 
 ```bash
-# Command Line Tools only (no Xcode): compiles sources + runs the spec.
-./scripts/verify.sh          # → ALL PASS — 74 checks
-
-# With full Xcode installed:
-swift test                   # runs the XCTest suite (mirrors the spec)
+swift test   # from this directory — runs the XCTest suite: 70 tests, 0 failures
 ```
 
-The XCTest suite under `Tests/` is the canonical suite for CI once Xcode is
-present; `Sources/voicely-spec` is a runnable mirror for CLT-only machines (see
-`../BUILD.md` for why SwiftPM needs Xcode here).
+The XCTest suite under `Tests/` is the canonical (and only) test suite.

@@ -17,6 +17,9 @@ final class SnippetExpanderTests: XCTestCase {
     func testNoMatchUnchanged() {
         XCTAssertEqual(SnippetExpander.expand("nothing here", snippets: email), "nothing here")
     }
+    func testEmptySnippetListUnchanged() {
+        XCTAssertEqual(SnippetExpander.expand("anything", snippets: []), "anything")
+    }
     func testLongerTriggerWins() {
         let s = [Snippet(trigger: "email", expansion: "E"), Snippet(trigger: "my email", expansion: "FULL")]
         XCTAssertEqual(SnippetExpander.expand("my email", snippets: s), "FULL")
@@ -31,13 +34,30 @@ final class CleanupModesTests: XCTestCase {
     private let vocab = [VocabularyEntry(term: "Vercel")]
 
     func testPresetsWithDefault() {
-        XCTAssertEqual(CleanupModes.all.count, 5)
+        XCTAssertEqual(CleanupModes.all.count, 7)
         XCTAssertNotNil(CleanupModes.mode(id: CleanupModes.defaultID))
     }
     func testTranslateModes() {
         XCTAssertTrue(CleanupModes.system(modeID: "translate-en", vocabulary: vocab).contains("fluent English"))
         XCTAssertTrue(CleanupModes.system(modeID: "translate-he", vocabulary: vocab).contains("Hebrew"))
         XCTAssertTrue(CleanupModes.system(modeID: "translate-en", vocabulary: vocab).contains("- Vercel"))
+    }
+    func testTranslateThaiTargetsThaiAndInjectsVocab() {
+        let tTH = CleanupModes.system(modeID: "translate-th", vocabulary: vocab)
+        XCTAssertTrue(tTH.contains("Thai"))
+        XCTAssertTrue(tTH.contains("- Vercel"))
+    }
+    func testTranslateThaiHasFriendlyLabel() {
+        XCTAssertEqual(CleanupModes.mode(id: "translate-th")?.name, "Translate → Thai")
+    }
+    func testTranslateThaiToEnglishDeclaresSourceAndTargetsEnglish() {
+        let tTHEN = CleanupModes.system(modeID: "translate-th-en", vocabulary: vocab)
+        XCTAssertTrue(tTHEN.contains("spoken Thai"))
+        XCTAssertTrue(tTHEN.contains("fluent English"))
+    }
+    func testTranslateThaiToEnglishNotesPolitenessParticles() {
+        let tTHEN = CleanupModes.system(modeID: "translate-th-en", vocabulary: vocab)
+        XCTAssertTrue(tTHEN.contains("ครับ"))
     }
     func testCleanUsesConservativePrompt() {
         XCTAssertTrue(CleanupModes.system(modeID: "clean", vocabulary: vocab).contains("editor, not an assistant"))
