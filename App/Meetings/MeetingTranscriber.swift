@@ -55,7 +55,10 @@ actor ParakeetMeetingTranscriber: MeetingTranscriber {
             return [TranscriptSegment(speaker: speaker, text: text, start: 0, end: result.duration)]
         }
         let tokens = timings.map { TimedToken(text: $0.token, start: $0.startTime, end: $0.endTime) }
+        // Parakeet exposes no per-segment confidence, so only the stock-phrase
+        // check applies here.
         return TokenGrouping.segments(from: tokens, speaker: speaker)
+            .filter { SpeechConfidence.isSpeech(text: $0.text, confidence: nil) }
     }
 }
 
@@ -91,7 +94,20 @@ actor WhisperMeetingTranscriber: MeetingTranscriber {
             // for its own top-level `text`, but that has no timings — and
             // timings are the point here — so we strip them ourselves.
             let text = WhisperText.strippingSpecialTokens(segment.text)
-            guard !text.isEmpty else { return nil }
+            // Whisper invents filler from silence, and a meeting's other track
+            // is silent whenever the other person isn't talking — so without
+            // this, every quiet gap becomes dialogue nobody said, and the
+            // summarizer treats it as real. It reports its own doubt; we act
+            // on it.
+            guard SpeechConfidence.isSpeech(
+                text: text,
+                confidence: SegmentConfidence(noSpeechProbability: segment.noSpeechProb,
+                                              averageLogProbability: segment.avgLogprob))
+            else {
+                VoicelyLog.meeting.info(
+                    "dropped a likely hallucination (noSpeech \(String(format: "%.2f", segment.noSpeechProb)))")
+                return nil
+            }
             return TranscriptSegment(speaker: speaker, text: text,
                                      start: TimeInterval(segment.start),
                                      end: TimeInterval(segment.end))
