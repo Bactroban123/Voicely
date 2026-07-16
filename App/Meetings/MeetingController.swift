@@ -26,6 +26,18 @@ final class MeetingController {
     // MARK: - Intent
 
     func start() {
+        // Self-heal before refusing. The FSM guards a failed meeting so its
+        // audio isn't silently abandoned — but if that meeting is GONE (the
+        // user discarded it, or it was deleted outside the app), the guard is
+        // protecting nothing and would block every future recording. Refusing
+        // to record because of a meeting that doesn't exist is worse than any
+        // failure it was guarding against.
+        if case .failed = session.state, activeMeeting.flatMap({ store.load($0.id) }) == nil {
+            VoicelyLog.meeting.info("clearing a failed meeting that's no longer on disk")
+            _ = session.handle(.discard)
+            activeMeeting = nil
+        }
+
         // Check before the FSM moves: running the disk dry mid-call would fail
         // the recording AND whatever else the user is doing. Refusing now costs
         // them a menu click; refusing in 40 minutes costs them the meeting.
@@ -69,6 +81,22 @@ final class MeetingController {
         let noun = pending.count == 1 ? "meeting" : "meetings"
         onNotice?("\(pending.count) unfinished \(noun) — open Meetings to finish or discard")
         onMeetingsChanged?()
+    }
+
+    /// Discards a stored meeting.
+    ///
+    /// Must be the ONLY way the UI deletes one. Deleting straight from the
+    /// store leaves the session believing an unfinished meeting still exists,
+    /// so the guard that protects an hour of audio from being abandoned starts
+    /// blocking every new recording — on a meeting that no longer exists.
+    /// That wedged the app in the field; the FSM was fine, the UI went around it.
+    func discard(_ meeting: Meeting) {
+        if activeMeeting?.id == meeting.id {
+            discard()               // through the FSM: resets to idle and cleans up
+        } else {
+            store.delete(meeting.id)
+            onMeetingsChanged?()
+        }
     }
 
     /// Re-runs whatever stage a stored meeting is stuck at. Used by the

@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import VoicelyCore
 
@@ -121,16 +122,34 @@ final class MeetingStore {
     // MARK: - Audio lifecycle
 
     /// Chunk URLs paired with their offsets, for transcription.
+    ///
+    /// Works on the reconciled meeting, so a crashed recording's files are
+    /// found even though its manifest is empty.
     func audioChunks(for meeting: Meeting) -> (mic: [(URL, RecordedChunk)], system: [(URL, RecordedChunk)]) {
+        let meeting = reconciled(meeting)
         let base = audioFolder(for: meeting.id)
+
         func pair(_ names: [String], _ offsets: [RecordedChunk]) -> [(URL, RecordedChunk)] {
-            zip(names, offsets).compactMap { name, offset in
-                let url = base.appendingPathComponent(name)
-                guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-                return (url, offset)
+            let urls = names.map { base.appendingPathComponent($0) }
+                .filter { FileManager.default.fileExists(atPath: $0.path) }
+            guard !urls.isEmpty else { return [] }
+
+            // An interrupted meeting has files but no offsets (they're written
+            // at stop). zip() would silently return NOTHING here — the audio
+            // would survive on disk and still never be transcribed. Fall back
+            // to measuring the files and summing their durations.
+            guard offsets.count == names.count else {
+                let timeline = ChunkTimeline(durations: urls.map(Self.duration(of:)))
+                return Array(zip(urls, timeline.chunks))
             }
+            return zip(urls, offsets).map { ($0, $1) }
         }
         return (pair(meeting.micChunks, meeting.micOffsets), pair(meeting.systemChunks, meeting.systemOffsets))
+    }
+
+    private static func duration(of url: URL) -> TimeInterval {
+        guard let file = try? AVAudioFile(forReading: url) else { return 0 }
+        return Double(file.length) / file.processingFormat.sampleRate
     }
 
     /// Deletes the audio once a transcript exists.
@@ -160,19 +179,63 @@ final class MeetingStore {
 
     // MARK: - Recovery
 
-    /// Meetings worth telling the user about at launch: interrupted recordings,
-    /// un-transcribed audio, retryable failures. The rules live in
-    /// `MeetingRecovery` so they're testable without a filesystem.
-    func needingRecovery() -> [Meeting] {
-        MeetingRecovery.needingAttention(list())
+    /// Rebuilds a meeting's chunk manifest from what is actually on disk.
+    ///
+    /// The header only lists chunks after a CLEAN STOP — the recorder writes
+    /// the files continuously, but `finalizeRecording` is what records their
+    /// names. So a crashed meeting has real audio on disk and an *empty*
+    /// manifest. Trusting the manifest made recovery classify it as an empty
+    /// husk and delete it: the recovery destroying exactly what it exists to
+    /// save. Observed in the field, 2026-07-16.
+    func reconciled(_ meeting: Meeting) -> Meeting {
+        guard meeting.micChunks.isEmpty, meeting.systemChunks.isEmpty, !meeting.audioDeleted else {
+            return meeting
+        }
+        let folder = audioFolder(for: meeting.id)
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        let mic = files.filter { $0.hasPrefix("mic-") && $0.hasSuffix(".caf") }.sorted()
+        let system = files.filter { $0.hasPrefix("system-") && $0.hasSuffix(".caf") }.sorted()
+        guard !mic.isEmpty || !system.isEmpty else { return meeting }
+
+        var out = meeting
+        out.micChunks = mic
+        out.systemChunks = system
+        // Offsets are written at stop, so an interrupted meeting has none. Left
+        // empty on purpose: `audioChunks` then measures the files and sums
+        // their durations, which is exactly what ChunkTimeline's fallback
+        // initialiser exists for.
+        out.micOffsets = []
+        out.systemOffsets = []
+        return out
     }
 
-    /// Deletes empty husks — a meeting whose header exists but which never got
-    /// a single chunk, from a start that failed immediately. Silent because
-    /// there is, by definition, nothing to lose; anything with audio or a
-    /// transcript is never touched here.
+    /// Meetings worth telling the user about at launch: interrupted recordings,
+    /// un-transcribed audio, retryable failures. The rules live in
+    /// `MeetingRecovery` so they're testable without a filesystem — but they're
+    /// asked about RECONCILED meetings, or a crashed one looks empty.
+    func needingRecovery() -> [Meeting] {
+        MeetingRecovery.needingAttention(list().map(reconciled))
+    }
+
+    /// Deletes husks that are genuinely empty — a header from a start that
+    /// failed before a single byte was written. Silent because there is, by
+    /// definition, nothing to lose.
+    ///
+    /// Deliberately paranoid: it re-checks the filesystem itself rather than
+    /// trusting any manifest, because the cost of being wrong here is somebody
+    /// losing an hour of a call they cannot re-record.
     func pruneDisposable() {
-        let disposable = list().filter(MeetingRecovery.isDisposable)
+        let disposable = list().map(reconciled).filter { meeting in
+            guard MeetingRecovery.isDisposable(meeting) else { return false }
+            let hasAudio = !((try? FileManager.default.contentsOfDirectory(atPath: audioFolder(for: meeting.id).path))?
+                .filter { $0.hasSuffix(".caf") } ?? []).isEmpty
+            let hasTranscript = !transcript(for: meeting.id).isEmpty
+            if hasAudio || hasTranscript {
+                VoicelyLog.meeting.warning("refusing to prune \(meeting.id): it still has audio or a transcript")
+                return false
+            }
+            return true
+        }
         guard !disposable.isEmpty else { return }
         for meeting in disposable { delete(meeting.id) }
         VoicelyLog.meeting.info("pruned \(disposable.count) empty meeting folder(s)")
