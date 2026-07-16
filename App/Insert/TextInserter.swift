@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import VoicelyCore
 
 /// Inserts text into the focused app using the policy from VoicelyCore.InsertPlan.
@@ -64,6 +65,17 @@ final class TextInserter {
     }
 
     private func postCommandV() -> Bool {
+        // Secure input silently discards synthetic key events. It's on whenever
+        // a password field has focus, and — the case that matters here —
+        // whenever Terminal or iTerm2 has "Secure Keyboard Entry" enabled.
+        // Posting anyway would report success for a paste that never lands, and
+        // the clipboard restore 250ms later would then destroy the transcript
+        // outright. Refusing makes the caller fall through to copy-only, which
+        // leaves the text on the clipboard for the user to paste.
+        guard !IsSecureEventInputEnabled() else {
+            VoicelyLog.insertion.warning("secure input active — cannot synthesize paste; left on the clipboard")
+            return false
+        }
         guard let source = CGEventSource(stateID: .combinedSessionState) else { return false }
         let vKeyCode: CGKeyCode = 9 // "v"
         guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKeyCode, keyDown: true),

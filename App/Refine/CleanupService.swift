@@ -5,6 +5,10 @@ enum CleanupError: Error {
     case noAPIKey
     case badResponse(Int)
     case malformed
+    /// The model hit the token cap and stopped mid-output. The API still
+    /// returns 200, so this must be detected explicitly or half a sentence
+    /// gets pasted as if it were the finished text.
+    case truncated
 }
 
 /// Sends the raw transcript to OpenRouter for cleanup using the VoicelyCore
@@ -47,9 +51,17 @@ final class CleanupService {
 
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let choices = object["choices"] as? [[String: Any]],
-              let message = choices.first?["message"] as? [String: Any],
+              let choice = choices.first,
+              let message = choice["message"] as? [String: Any],
               let content = message["content"] as? String
         else { throw CleanupError.malformed }
+
+        // A truncated completion is a 200 with finish_reason "length". Rather
+        // than paste half a sentence, throw: the pipeline's designed fallback
+        // inserts the raw transcript, so the dictation is never lost.
+        if let finishReason = choice["finish_reason"] as? String, finishReason == "length" {
+            throw CleanupError.truncated
+        }
 
         return content.trimmingCharacters(in: .whitespacesAndNewlines)
     }
