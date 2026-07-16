@@ -27,7 +27,7 @@ struct MonsterDNA: Identifiable {
         let special = (hue + Double.random(in: 0.15...0.30)).truncatingRemainder(dividingBy: 1)
         return MonsterDNA(
             id: UUID(),
-            class_: MonsterClass.allCases.randomElement()!,
+            class_: MonsterClass.allCases.randomElement() ?? .knight,
             primaryHue: hue,
             accentHue: accent,
             specialHue: special,

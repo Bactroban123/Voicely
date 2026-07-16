@@ -1,0 +1,71 @@
+name: CI
+
+# Runs on every push to main and on every pull request, unlike release.yml /
+# windows.yml which only fire on version tags. This is the fast feedback loop
+# for day-to-day changes.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Cancel superseded runs on PRs only — keep main's CI history gapless.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  unit-tests:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache VoicelyCore SPM build
+        uses: actions/cache@v4
+        with:
+          path: VoicelyCore/.build
+          key: spm-core-${{ hashFiles('VoicelyCore/Package.swift') }}
+          restore-keys: |
+            spm-core-
+
+      - name: swift test
+        working-directory: VoicelyCore
+        run: swift test
+
+  app-build:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: brew install xcodegen swiftlint
+
+      # Lint before the (slow) build so lint-only failures surface fast and
+      # aren't masked by a build failure.
+      - name: swiftlint
+        run: swiftlint lint --strict
+
+      - name: Cache app SPM packages
+        uses: actions/cache@v4
+        with:
+          path: .build-xcode/SourcePackages
+          key: spm-app-${{ hashFiles('project.yml') }}
+          restore-keys: |
+            spm-app-
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      # No `setup-xcode` pin here: the runner's default Xcode is used, same
+      # as release.yml (which also doesn't select a version). The app targets
+      # the latest macOS SDKs, so tracking the runner default keeps CI and
+      # the release build on the same toolchain without a version to update.
+      - name: Build
+        run: |
+          xcodebuild -project Voicely.xcodeproj -scheme Voicely -configuration Debug \
+            -derivedDataPath .build-xcode build CODE_SIGNING_ALLOWED=NO

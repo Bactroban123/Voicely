@@ -270,7 +270,7 @@ fileprivate final class ArenaEngine: ObservableObject {
                 vy: sin(angle) * speed,
                 life: CGFloat.random(in: 2.0...4.5),
                 maxLife: 4.5,
-                color: bloodColors.randomElement()!,
+                color: bloodColors.randomElement() ?? bloodColors[0],
                 size: CGFloat.random(in: PIXEL * 0.5 ... PIXEL * 1.5)
             ))
         }
