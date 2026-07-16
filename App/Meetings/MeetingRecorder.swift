@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import VoicelyCore
 
 /// Records a meeting as two independent tracks — the microphone ("Me") and the
 /// system output mixdown ("Them") — straight to disk.
@@ -45,10 +46,12 @@ final class MeetingRecorder {
 
     private struct Track {
         let name: String
-        var chunkIndex = 0
+        var chunkIndex = -1                      // -1 = nothing opened yet
         var file: AVAudioFile?
         var framesInChunk: AVAudioFrameCount = 0
         var started = false
+        /// Wall-clock offset of each opened chunk, against the meeting's t=0.
+        var offsets: [Int: TimeInterval] = [:]
     }
 
     /// Rotate every 5 minutes: bounds worst-case loss on a hard kill to one
@@ -80,6 +83,10 @@ final class MeetingRecorder {
     private var tapFormat: AVAudioFormat?
     private var isRecording = false
     private var configObserver: NSObjectProtocol?
+    /// The meeting's t=0. Both tracks measure against this one clock — deriving
+    /// each track's zero from its own first sample would bias them apart by
+    /// however long the tap took to come up.
+    private var startedAt: Date?
 
     init(directory: URL) {
         self.directory = directory
@@ -103,6 +110,7 @@ final class MeetingRecorder {
                 // the last chunk and truncate the previous meeting's audio.
                 micTrack = Track(name: "mic")
                 systemTrack = Track(name: "system")
+                startedAt = Date()
                 try startMic()
                 let outcome = startSystem()
                 isRecording = true
@@ -120,13 +128,13 @@ final class MeetingRecorder {
 
     /// Stops both tracks and closes the current chunks. `completion` receives
     /// the chunk files written, in order, per track.
-    func stop(completion: @escaping (_ mic: [URL], _ system: [URL]) -> Void) {
+    func stop(completion: @escaping (_ mic: [(URL, RecordedChunk)], _ system: [(URL, RecordedChunk)]) -> Void) {
         queue.async { [self] in
             let wasRecording = isRecording
             drainRing()          // flush whatever the ring still holds
             teardown()
-            let mic = chunkURLs(for: micTrack)
-            let system = chunkURLs(for: systemTrack)
+            let mic = recordedChunks(for: micTrack)
+            let system = recordedChunks(for: systemTrack)
             if wasRecording {
                 let dropped = systemRing.dropped
                 VoicelyLog.meeting.info(
@@ -241,7 +249,7 @@ final class MeetingRecorder {
 
         let needsRotation = track.file != nil && track.framesInChunk + buffer.frameLength > framesPerChunk
         if track.file == nil || needsRotation {
-            guard openChunk(&track, advance: needsRotation) else { return }
+            guard openChunk(&track) else { return }
         }
         do {
             try track.file?.write(from: buffer)
@@ -251,17 +259,21 @@ final class MeetingRecorder {
         }
     }
 
-    /// Opens the next chunk. Returns false if it couldn't — and drops the stale
-    /// file so a failure can't leave the previous chunk growing past its cap
-    /// while every subsequent buffer retries and log-spams.
-    private func openChunk(_ track: inout Track, advance: Bool) -> Bool {
-        let index = advance ? track.chunkIndex + 1 : track.chunkIndex
+    /// Opens the next chunk and stamps its wall-clock offset.
+    ///
+    /// The index ALWAYS advances, including after a failure. Reusing it would
+    /// reopen the previous chunk `forWriting` on the next buffer and truncate
+    /// five minutes of recorded meeting — destroying audio while trying to
+    /// recover from not being able to write it.
+    private func openChunk(_ track: inout Track) -> Bool {
+        track.chunkIndex += 1
+        let index = track.chunkIndex
         let url = chunkURL(name: track.name, index: index)
         do {
             track.file = try AVAudioFile(forWriting: url, settings: targetFormat.settings,
                                          commonFormat: .pcmFormatInt16, interleaved: true)
-            track.chunkIndex = index
             track.framesInChunk = 0
+            track.offsets[index] = Date().timeIntervalSince(startedAt ?? Date())
             return true
         } catch {
             track.file = nil
@@ -315,15 +327,23 @@ final class MeetingRecorder {
         micTrack.started = false
         systemTrack.file = nil
         systemTrack.started = false
+        startedAt = nil
     }
 
     private func chunkURL(name: String, index: Int) -> URL {
         directory.appendingPathComponent(String(format: "%@-%04d.caf", name, index))
     }
 
-    private func chunkURLs(for track: Track) -> [URL] {
-        (0...max(track.chunkIndex, 0))
-            .map { chunkURL(name: track.name, index: $0) }
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
+    /// Chunks written, in order, each with the wall-clock offset it started at.
+    private func recordedChunks(for track: Track) -> [(URL, RecordedChunk)] {
+        guard track.chunkIndex >= 0 else { return [] }
+        return (0...track.chunkIndex).compactMap { index in
+            let url = chunkURL(name: track.name, index: index)
+            guard FileManager.default.fileExists(atPath: url.path),
+                  let offset = track.offsets[index] else { return nil }
+            let duration = (try? AVAudioFile(forReading: url))
+                .map { Double($0.length) / $0.processingFormat.sampleRate } ?? 0
+            return (url, RecordedChunk(startOffset: offset, duration: duration))
+        }
     }
 }

@@ -31,7 +31,13 @@ public struct TimedToken: Equatable {
 /// running real audio through it. It was, once.
 public enum TokenGrouping {
     /// A pause longer than this ends the current utterance.
-    public static let defaultUtteranceGap: TimeInterval = 0.8
+    ///
+    /// `DialogueMerge` coalesces with the same value, deliberately. When this
+    /// was smaller, every pause in the gap between the two thresholds was split
+    /// here and rejoined there — and rejoining inserts a space where the token's
+    /// own spacing was authoritative, rendering "Hey ," for a hesitation before
+    /// punctuation. One threshold, applied once.
+    public static let defaultUtteranceGap: TimeInterval = 1.5
 
     public static func segments(from tokens: [TimedToken],
                                 speaker: Speaker,

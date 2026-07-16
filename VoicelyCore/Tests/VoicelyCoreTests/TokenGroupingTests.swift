@@ -63,9 +63,23 @@ final class TokenGroupingTests: XCTestCase {
     func testShortGapsDoNotSplit() {
         let segments = TokenGrouping.segments(from: [
             TimedToken(text: " um", start: 0.0, end: 0.3),
-            TimedToken(text: " so", start: 0.9, end: 1.2),   // 0.6s < 0.8 gap
+            TimedToken(text: " so", start: 0.9, end: 1.2),   // 0.6s pause, inside the gap
         ], speaker: .me)
         XCTAssertEqual(segments.count, 1)
+    }
+
+    /// A split here must never be undone by DialogueMerge: rejoining inserts a
+    /// space the tokens didn't have, so "Hey" + "," would render "Hey ,".
+    func testAGroupingSplitIsNeverRejoinedByTheMerge() {
+        let tokens = [
+            TimedToken(text: " Hey", start: 0.0, end: 0.4),
+            TimedToken(text: ",", start: 2.4, end: 2.5),     // long hesitation before punctuation
+        ]
+        let segments = TokenGrouping.segments(from: tokens, speaker: .me)
+        XCTAssertEqual(segments.count, 2, "the pause exceeds the gap, so grouping splits")
+        let merged = DialogueMerge.merge(me: segments, them: [])
+        XCTAssertEqual(merged.count, 2, "the merge must not rejoin what grouping split")
+        XCTAssertFalse(DialogueMerge.render(merged).contains("Hey ,"))
     }
 
     func testGapIsConfigurable() {

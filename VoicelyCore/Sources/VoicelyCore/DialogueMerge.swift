@@ -13,7 +13,18 @@ public enum DialogueMerge {
     /// Segments closer than this to the previous one from the same speaker are
     /// joined. ASR emits per-token or per-VAD-chunk pieces, so without this a
     /// transcript reads as one line per breath.
-    public static let defaultCoalesceGap: TimeInterval = 1.5
+    ///
+    /// Deliberately the SAME value as `TokenGrouping.defaultUtteranceGap`. When
+    /// this was larger, every pause in between was split by grouping and then
+    /// rejoined here — and rejoining inserts a space where the token's own
+    /// spacing was authoritative, rendering "Hey ," for a hesitation before
+    /// punctuation. Two thresholds that disagree just undo each other's work.
+    public static let defaultCoalesceGap: TimeInterval = TokenGrouping.defaultUtteranceGap
+
+    /// A single speaker with no real pause still becomes a new line after this
+    /// long: an unbroken 10-minute presentation would otherwise coalesce into
+    /// one ~1,500-word paragraph in a single Text view.
+    public static let maxUtteranceDuration: TimeInterval = 30
 
     /// Merge mic ("me") and system ("them") segments into a single ordered
     /// dialogue.
@@ -32,6 +43,10 @@ public enum DialogueMerge {
             .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .sorted { lhs, rhs in
                 if lhs.start != rhs.start { return lhs.start < rhs.start }
+                // Ties are common, not rare: engine timings are quantised to a
+                // frame grid (Parakeet: 80ms), and both tracks share t=0. This
+                // tie-break is arbitrary but stable — sub-frame ordering in a
+                // fast exchange is not information we actually have.
                 if lhs.speaker != rhs.speaker { return lhs.speaker == .me }
                 return lhs.end < rhs.end
             }
@@ -47,7 +62,8 @@ public enum DialogueMerge {
             let clean = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !clean.isEmpty else { continue }
 
-            if let last = result.last, last.adjoins(segment, within: gap) {
+            if let last = result.last, last.adjoins(segment, within: gap),
+               segment.end - last.start <= maxUtteranceDuration {
                 result[result.count - 1] = TranscriptSegment(
                     speaker: last.speaker,
                     text: last.text + " " + clean,

@@ -1,41 +1,74 @@
 import Foundation
 
+/// Where a recorded chunk sits on the meeting's timeline.
+///
+/// `startOffset` is wall-clock seconds since the meeting began, captured when
+/// the chunk took its first sample — **not** derived by summing the durations
+/// of everything before it. That distinction is the whole point of this type:
+///
+/// - The two tracks don't start together. The mic engine starts before the
+///   system tap (creating the aggregate device takes time), so summing
+///   durations gives each track a *different* t=0 and biases one speaker's
+///   timestamps early by a few hundred ms — fabricating overlap where the
+///   reply politely waited.
+/// - Recorded audio is not the same as elapsed time. A device switch rebuilds
+///   the mic engine, a full disk fails a chunk open, a ring overflow drops
+///   samples: in each case the clock advances but the file doesn't grow. Summed
+///   durations then run *early* by the lost time, on one track only, which
+///   doesn't merely shift the transcript — it interleaves the wrong speaker's
+///   turns. Wall-clock offsets absorb every one of those, silently and
+///   correctly.
+public struct RecordedChunk: Equatable {
+    /// Seconds from the start of the meeting to this chunk's first sample.
+    public let startOffset: TimeInterval
+    /// Measured length of the chunk's audio, for reference/diagnostics.
+    public let duration: TimeInterval
+
+    public init(startOffset: TimeInterval, duration: TimeInterval) {
+        self.startOffset = startOffset
+        self.duration = duration
+    }
+}
+
 /// Maps positions inside per-chunk transcripts onto the meeting's timeline.
 ///
-/// Each track is recorded as a sequence of chunk files and transcribed one
-/// chunk at a time, so every engine result starts its clock at zero. To place a
-/// segment on the meeting's timeline you add the total duration of everything
-/// before its chunk.
-///
-/// The durations must be *measured*, never assumed: chunks are nominally 5
-/// minutes, but the last one is short, and a rotation failure or a device
-/// change can make any of them short. Assuming the nominal length would drift
-/// every timestamp after the first anomaly — and drift is silent, which is the
-/// failure mode this project keeps finding the hard way.
+/// Each chunk is transcribed on its own, so every engine result starts its clock
+/// at zero; placing it means adding that chunk's offset.
 public struct ChunkTimeline: Equatable {
-    /// Measured duration of each chunk, in recording order.
-    public let durations: [TimeInterval]
-    /// Cumulative start offset of each chunk on the meeting timeline.
-    public let offsets: [TimeInterval]
+    public let chunks: [RecordedChunk]
 
-    public init(durations: [TimeInterval]) {
-        self.durations = durations
-        var running: TimeInterval = 0
-        var offsets: [TimeInterval] = []
-        offsets.reserveCapacity(durations.count)
-        for duration in durations {
-            offsets.append(running)
-            running += max(0, duration)
-        }
-        self.offsets = offsets
+    /// Preferred: offsets measured against the meeting's own clock.
+    public init(chunks: [RecordedChunk]) {
+        self.chunks = chunks
     }
 
-    /// Total measured length of the track.
-    public var total: TimeInterval { durations.reduce(0) { $0 + max(0, $1) } }
+    /// Fallback for when only durations are known (no wall-clock stamps).
+    /// Accumulates them, and treats a non-positive duration as `assumedDuration`
+    /// rather than zero — a chunk that couldn't be measured occupied real time,
+    /// and advancing by 0 would put everything after it wildly early.
+    public init(durations: [TimeInterval], assumedDuration: TimeInterval = 300) {
+        var running: TimeInterval = 0
+        var chunks: [RecordedChunk] = []
+        chunks.reserveCapacity(durations.count)
+        for duration in durations {
+            let effective = duration > 0 ? duration : assumedDuration
+            chunks.append(RecordedChunk(startOffset: running, duration: effective))
+            running += effective
+        }
+        self.chunks = chunks
+    }
 
-    /// Where chunk `index` starts on the meeting timeline; nil if out of range.
+    /// Offsets of each chunk, in order.
+    public var offsets: [TimeInterval] { chunks.map(\.startOffset) }
+
+    /// End of the last chunk on the meeting timeline.
+    public var total: TimeInterval {
+        chunks.map { $0.startOffset + max(0, $0.duration) }.max() ?? 0
+    }
+
+    /// Where chunk `index` starts; nil if out of range.
     public func offset(ofChunk index: Int) -> TimeInterval? {
-        offsets.indices.contains(index) ? offsets[index] : nil
+        chunks.indices.contains(index) ? chunks[index].startOffset : nil
     }
 
     /// Shifts a chunk-relative segment onto the meeting timeline.

@@ -6,7 +6,7 @@ final class ChunkTimelineTests: XCTestCase {
         TranscriptSegment(speaker: .them, text: text, start: start, end: end)
     }
 
-    func testOffsetsAccumulateFromMeasuredDurations() {
+    func testDurationFallbackAccumulatesWhenNoWallClockIsAvailable() {
         let timeline = ChunkTimeline(durations: [300, 300, 120])
         XCTAssertEqual(timeline.offsets, [0, 300, 600])
         XCTAssertEqual(timeline.total, 720)
@@ -52,10 +52,40 @@ final class ChunkTimelineTests: XCTestCase {
         XCTAssertNil(timeline.offset(ofChunk: 0))
     }
 
-    func testNegativeDurationsCannotRewindTheTimeline() {
-        let timeline = ChunkTimeline(durations: [300, -50, 100])
-        XCTAssertEqual(timeline.offsets, [0, 300, 300])
-        XCTAssertEqual(timeline.total, 400)
+    func testUnmeasurableChunksAssumeTheNominalLengthRatherThanCollapsing() {
+        // A chunk that can't be measured (unreadable file, or one that opened
+        // but never took a write) still occupied real time. Advancing by 0
+        // would put every later segment ~5 min early on THIS track only —
+        // which doesn't just shift the transcript, it interleaves the wrong
+        // speaker's turns into the merged dialogue.
+        let timeline = ChunkTimeline(durations: [300, 0, 300], assumedDuration: 300)
+        XCTAssertEqual(timeline.offsets, [0, 300, 600])
+        let negative = ChunkTimeline(durations: [300, -50, 100], assumedDuration: 300)
+        XCTAssertEqual(negative.offsets, [0, 300, 600])
+    }
+
+    func testWallClockChunksArePreferredOverSummedDurations() {
+        // The real path: offsets measured against the meeting's own clock, so a
+        // gap in recorded audio (device switch, dropped samples) can't drift
+        // later timestamps.
+        let timeline = ChunkTimeline(chunks: [
+            RecordedChunk(startOffset: 0, duration: 300),
+            RecordedChunk(startOffset: 305, duration: 295),   // 5s gap: device switch
+        ])
+        XCTAssertEqual(timeline.offset(ofChunk: 1), 305)      // not 300
+        XCTAssertEqual(timeline.place(seg("x", 10, 11), fromChunk: 1)?.start, 315)
+    }
+
+    func testBothTracksShareOneClockSoTheyCannotDriftApart() {
+        // The tap comes up after the mic, so the system track's first chunk
+        // starts later — measured against the SAME t=0, not its own.
+        let mic = ChunkTimeline(chunks: [RecordedChunk(startOffset: 0, duration: 300)])
+        let system = ChunkTimeline(chunks: [RecordedChunk(startOffset: 0.4, duration: 299.6)])
+        let me = mic.place([TranscriptSegment(speaker: .me, text: "hi", start: 0, end: 1)], fromChunk: 0)
+        let them = system.place([TranscriptSegment(speaker: .them, text: "hello", start: 0.2, end: 1.2)], fromChunk: 0)
+        let merged = DialogueMerge.merge(me: me, them: them)
+        XCTAssertEqual(merged.first?.speaker, .me)            // me really did speak first
+        XCTAssertEqual(them.first?.start ?? 0, 0.6, accuracy: 1e-9)   // 0.4 skew + 0.2 in-chunk
     }
 
     func testTwoTracksOfDifferingLengthsPlaceIndependently() {
