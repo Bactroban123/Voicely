@@ -16,6 +16,7 @@ enum VoicelyLog {
     static let cleanup   = Channel(category: "cleanup")
     static let settings  = Channel(category: "settings")
     static let lifecycle = Channel(category: "lifecycle")
+    static let meeting   = Channel(category: "meeting")
 
     struct Channel {
         let category: String
