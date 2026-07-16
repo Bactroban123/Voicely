@@ -272,6 +272,22 @@ final class DictationSessionTests: XCTestCase {
         }
     }
 
+    func testFailureDeliveredAfterSuccessCannotStrandThePipeline() {
+        // Found by fuzzing: recordingFailedToStart bypasses Pipeline, so if a
+        // failure arrives for a take the engine already confirmed, it must be
+        // ignored — otherwise the pipeline stays .recording with no take in
+        // flight and every press busy-rejects until Esc.
+        var s = makeSession()
+        let token = startTake(&s)
+        XCTAssertEqual(s.pipelineState, .recording)
+        XCTAssertEqual(s.recordingFailedToStart(token), .none)
+        XCTAssertEqual(s.pipelineState, .recording) // unchanged
+        XCTAssertTrue(s.isRecorderLive)             // still a live take, not a zombie
+        // The take still completes normally.
+        XCTAssertEqual(s.handleKey(up(hotKey, at: 1.0)), .stopRecording(token))
+        XCTAssertEqual(s.recordingStopped(token), .beginTranscription(token))
+    }
+
     func testCompletionsAfterFailedStartAreDropped() {
         var s = makeSession()
         guard case .startRecording(let token) = s.handleKey(down(hotKey, at: 0)) else {
