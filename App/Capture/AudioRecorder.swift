@@ -15,6 +15,9 @@ enum AudioRecorderError: Error {
     /// (or a device switch is still settling). installTap would throw an
     /// uncatchable NSException with such a format, so we refuse first.
     case noUsableInputDevice
+    /// The tap format still disagrees with the hardware rate even after a
+    /// fresh engine. installTap would abort the app on this, so we refuse.
+    case inputFormatMismatch(tapRate: Double, hardwareRate: Double)
     /// The mic's native format can't be converted to 16kHz mono (exotic
     /// device). Previously this was swallowed: every buffer was dropped and
     /// the take produced silence with no diagnostic anywhere.
@@ -22,7 +25,9 @@ enum AudioRecorderError: Error {
 }
 
 final class AudioRecorder {
-    private let engine = AVAudioEngine()
+    /// Queue-confined. Replaced wholesale when its input format goes stale
+    /// after a device switch — see `AVAudioInputNode.hasStaleOutputFormat`.
+    private var engine = AVAudioEngine()
     private let targetFormat = AudioRecorder.makeTargetFormat()
     private var samples: [Float] = []
     private let lock = NSLock()
@@ -51,14 +56,7 @@ final class AudioRecorder {
     var onLevel: ((Float) -> Void)?
 
     init() {
-        // Default-device switches (e.g. Bluetooth headset connecting) reset the
-        // engine; rebuild capture instead of silently recording nothing.
-        configObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
-        ) { [weak self] _ in
-            guard let self else { return }
-            self.queue.async { self.handleConfigurationChange() }
-        }
+        observeConfigurationChanges()
     }
 
     deinit {
@@ -112,11 +110,48 @@ final class AudioRecorder {
 
     // MARK: - Queue-confined internals
 
+    /// Default-device switches (e.g. Bluetooth headset connecting) reset the
+    /// engine; rebuild capture instead of silently recording nothing. The
+    /// notification is per engine instance, so `replaceEngine()` re-registers.
+    private func observeConfigurationChanges() {
+        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
+        let observed = engine
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: observed, queue: nil
+        ) { [weak self, weak observed] _ in
+            guard let self else { return }
+            self.queue.async {
+                // A change queued by an engine we've since replaced is stale news.
+                guard let observed, observed === self.engine else { return }
+                self.handleConfigurationChange()
+            }
+        }
+    }
+
+    private func replaceEngine() {
+        engine.stop()
+        engine = AVAudioEngine()
+        observeConfigurationChanges()
+    }
+
     private func beginCapture() throws {
+        if engine.inputNode.hasStaleOutputFormat {
+            let stale = engine.inputNode
+            VoicelyLog.recording.warning(
+                "input format is stale after a device change (\(Int(stale.outputFormat(forBus: 0).sampleRate)) Hz,"
+                    + " hardware \(Int(stale.inputFormat(forBus: 0).sampleRate)) Hz) — rebuilding the audio engine")
+            replaceEngine()
+        }
         let input = engine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             throw AudioRecorderError.noUsableInputDevice
+        }
+        // installTap's own precondition, checked here so a mismatch is a
+        // failed take instead of an abort.
+        let hardwareRate = input.inputFormat(forBus: 0).sampleRate
+        guard inputFormat.sampleRate == hardwareRate else {
+            throw AudioRecorderError.inputFormatMismatch(tapRate: inputFormat.sampleRate, hardwareRate: hardwareRate)
         }
 
         // The converter is captured by THIS tap's closure (not a shared stored
@@ -146,6 +181,16 @@ final class AudioRecorder {
     private func handleConfigurationChange() {
         guard isCapturing else {
             VoicelyLog.recording.info("audio config changed while idle — re-arming engine")
+            // Swap a stale engine now, so the next press doesn't pay for the
+            // rebuild (beginCapture still checks, as the backstop).
+            if engine.inputNode.hasStaleOutputFormat {
+                let stale = engine.inputNode
+                VoicelyLog.recording.warning(
+                    "input format went stale (\(Int(stale.outputFormat(forBus: 0).sampleRate)) Hz,"
+                        + " hardware \(Int(stale.inputFormat(forBus: 0).sampleRate)) Hz) — rebuilding the idle audio engine")
+                replaceEngine()
+                _ = engine.inputNode.outputFormat(forBus: 0) // pull the input unit in, as prewarm does
+            }
             engine.prepare()
             return
         }
