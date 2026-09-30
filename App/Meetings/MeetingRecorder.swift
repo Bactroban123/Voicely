@@ -24,12 +24,15 @@ final class MeetingRecorder {
     enum RecorderError: Error, CustomStringConvertible {
         case micUnavailable
         case noUsableInputFormat
+        case inputFormatMismatch(tapRate: Double, hardwareRate: Double)
         case alreadyRecording
 
         var description: String {
             switch self {
             case .micUnavailable: return "couldn't build a converter for the microphone format"
             case .noUsableInputFormat: return "no usable microphone input device"
+            case let .inputFormatMismatch(tapRate, hardwareRate):
+                return "microphone format (\(Int(tapRate)) Hz) disagrees with the hardware (\(Int(hardwareRate)) Hz)"
             case .alreadyRecording: return "a meeting is already recording"
             }
         }
@@ -62,7 +65,9 @@ final class MeetingRecorder {
 
     private let queue = DispatchQueue(label: "com.voicely.meeting.recorder", qos: .userInitiated)
     private let directory: URL
-    private let engine = AVAudioEngine()
+    /// Queue-confined. Replaced wholesale when its input format goes stale
+    /// after a device switch — see `AVAudioInputNode.hasStaleOutputFormat`.
+    private var engine = AVAudioEngine()
     private let tap = SystemAudioTap()
     private let systemRing = SampleRing()
     private var drainTimer: DispatchSourceTimer?
@@ -148,10 +153,23 @@ final class MeetingRecorder {
     // MARK: - Queue-confined internals
 
     private func startMic() throws {
+        if engine.inputNode.hasStaleOutputFormat {
+            let stale = engine.inputNode
+            VoicelyLog.meeting.warning(
+                "mic format is stale after a device change (\(Int(stale.outputFormat(forBus: 0).sampleRate)) Hz,"
+                    + " hardware \(Int(stale.inputFormat(forBus: 0).sampleRate)) Hz) — rebuilding the audio engine")
+            replaceEngine()
+        }
         let input = engine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             throw RecorderError.noUsableInputFormat
+        }
+        // installTap's own precondition, checked here so a mismatch loses the
+        // mic track instead of aborting the app mid-meeting.
+        let hardwareRate = input.inputFormat(forBus: 0).sampleRate
+        guard inputFormat.sampleRate == hardwareRate else {
+            throw RecorderError.inputFormatMismatch(tapRate: inputFormat.sampleRate, hardwareRate: hardwareRate)
         }
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
             throw RecorderError.micUnavailable
@@ -287,12 +305,14 @@ final class MeetingRecorder {
     /// mic track goes silent for the rest of the meeting.
     private func observeConfigurationChanges() {
         guard configObserver == nil else { return }
+        let observed = engine
         configObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
-        ) { [weak self] _ in
+            forName: .AVAudioEngineConfigurationChange, object: observed, queue: nil
+        ) { [weak self, weak observed] _ in
             guard let self else { return }
             self.queue.async {
-                guard self.isRecording else { return }
+                // A change queued by an engine we've since replaced is stale news.
+                guard self.isRecording, let observed, observed === self.engine else { return }
                 VoicelyLog.meeting.warning("audio device changed mid-meeting — rebuilding the mic track")
                 self.engine.inputNode.removeTap(onBus: 0)
                 self.engine.stop()
@@ -302,6 +322,18 @@ final class MeetingRecorder {
                     VoicelyLog.meeting.error("mic track lost after a device change — \(error)")
                 }
             }
+        }
+    }
+
+    /// The config observer is bound to one engine instance, so a live
+    /// observer (mid-meeting) moves to the replacement.
+    private func replaceEngine() {
+        engine.stop()
+        engine = AVAudioEngine()
+        if let configObserver {
+            NotificationCenter.default.removeObserver(configObserver)
+            self.configObserver = nil
+            observeConfigurationChanges()
         }
     }
 
