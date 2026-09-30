@@ -72,12 +72,31 @@ actor ParakeetMeetingTranscriber: MeetingTranscriber {
 actor WhisperMeetingTranscriber: MeetingTranscriber {
     private var kit: WhisperKit?
     private let modelName: String
+    private let modelsDirectory: URL
 
-    init(modelName: String = "large-v3-v20240930_turbo") { self.modelName = modelName }
+    /// - Parameter modelsDirectory: see `ModelStorage`. WhisperKit defaults to
+    ///   `~/Documents/huggingface`, which iCloud Drive syncs and evicts.
+    init(modelName: String = "large-v3-v20240930_turbo",
+         modelsDirectory: URL = ModelStorage.modelsDirectory(
+            applicationSupport: FileManager.default.urls(for: .applicationSupportDirectory,
+                                                        in: .userDomainMask)[0])) {
+        self.modelName = modelName
+        self.modelsDirectory = modelsDirectory
+    }
 
     func prepare() async throws {
         guard kit == nil else { return }
-        kit = try await WhisperKit(model: modelName, verbose: false, prewarm: true, load: true, download: true)
+        assert(ModelStorage.isSafeForModelWeights(modelsDirectory),
+               "model weights must not live somewhere macOS can sync or purge: \(modelsDirectory.path)")
+        VoicelyLog.model.info("loading \(modelName) from \(modelsDirectory.path)")
+        let started = Date()
+        kit = try await WhisperKit(model: modelName,
+                                   downloadBase: modelsDirectory,
+                                   verbose: false,
+                                   prewarm: true,
+                                   load: true,
+                                   download: true)
+        VoicelyLog.model.info("loaded \(modelName) in \(Int(Date().timeIntervalSince(started) * 1000))ms")
     }
 
     func segments(inChunk url: URL, speaker: VoicelyCore.Speaker) async throws -> [TranscriptSegment] {
