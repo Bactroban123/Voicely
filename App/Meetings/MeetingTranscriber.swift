@@ -90,12 +90,7 @@ actor WhisperMeetingTranscriber: MeetingTranscriber {
                "model weights must not live somewhere macOS can sync or purge: \(modelsDirectory.path)")
         VoicelyLog.model.info("loading \(modelName) from \(modelsDirectory.path)")
         let started = Date()
-        kit = try await WhisperKit(model: modelName,
-                                   downloadBase: modelsDirectory,
-                                   verbose: false,
-                                   prewarm: true,
-                                   load: true,
-                                   download: true)
+        kit = try await WhisperKitLoader.load(model: modelName, directory: modelsDirectory)
         VoicelyLog.model.info("loaded \(modelName) in \(Int(Date().timeIntervalSince(started) * 1000))ms")
     }
 
