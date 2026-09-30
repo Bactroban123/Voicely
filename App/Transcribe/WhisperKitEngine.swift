@@ -5,7 +5,8 @@ import WhisperKit
 /// On-device transcription via WhisperKit (Whisper large-v3-turbo). Unlike
 /// Parakeet, Whisper is multilingual (~100 languages incl. Hebrew), with
 /// automatic language detection so it handles English and Hebrew in one model.
-/// First use downloads the model (~600 MB) once.
+/// First use downloads the model (~1.5 GB on disk) once; after that it loads
+/// from disk, online or not.
 actor WhisperKitEngine: TranscriptionEngine {
     private var kit: WhisperKit?
     /// The in-flight load, so concurrent callers join it instead of each
@@ -61,15 +62,7 @@ actor WhisperKitEngine: TranscriptionEngine {
         let directory = modelsDirectory
         VoicelyLog.model.info("loading \(name) from \(directory.path)")
         let started = Date()
-        let task = Task {
-            try await WhisperKit(
-                model: name,
-                downloadBase: directory, // also where the tokenizer lands
-                verbose: false,
-                prewarm: true,
-                load: true,
-                download: true)
-        }
+        let task = Task { try await WhisperKitLoader.load(model: name, directory: directory) }
         loadTask = task
         do {
             let loaded = try await task.value
