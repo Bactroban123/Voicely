@@ -76,7 +76,11 @@ final class RecordingController {
             apply(session.setHotKeyConfig(config)) // cancels a take the old key can no longer stop
         }
         engine = Self.makeEngine(for: settings.transcriptionModelID)
-        Task { [engine] in try? await engine.prepare() } // warm-load
+        // Warm-load. The error is dropped on purpose: a failure here is not
+        // actionable (the next dictation retries), and WhisperKitEngine logs it
+        // on the `model` channel — this `try?` used to be its only handler,
+        // which is why a model that never loaded produced no evidence at all.
+        Task { [engine] in try? await engine.prepare() }
     }
 
     private var currentHotKeyConfig: HotKeyConfig?
